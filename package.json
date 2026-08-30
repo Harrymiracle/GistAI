@@ -1,0 +1,10 @@
+{
+  "name": "gistai",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @gistai/web",
+    "build:web": "npm run build --workspace @gistai/web"
+  }
+}

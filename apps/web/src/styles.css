@@ -1,0 +1,73 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172033;
+  background: #f4f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 16px;
+  color: #ffffff;
+  background: #3157d5;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.status-card {
+  width: min(100%, 440px);
+  padding: 40px;
+  border: 1px solid #e3e9f2;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 18px 55px rgb(31 49 86 / 10%);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #3157d5;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 0 0 24px;
+  font-size: 42px;
+}
+
+.status {
+  margin: 0 0 24px;
+  color: #667085;
+}
+
+.status--healthy {
+  color: #137a4d;
+}
+
+.status--unavailable {
+  color: #b54736;
+}
