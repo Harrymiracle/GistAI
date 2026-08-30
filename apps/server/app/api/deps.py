@@ -2,6 +2,8 @@ from collections.abc import Generator
 
 from sqlalchemy.orm import Session
 
+from app.ai.client import OpenAICompatibleClient
+from app.ai.service import AIService
 from app.core.config import settings
 from app.crawler.browser_fetcher import PlaywrightFetcher
 from app.crawler.extractor import ArticleExtractor
@@ -53,3 +55,16 @@ def get_min_content_chars() -> int:
     """返回网页提取和手动正文共用的最小正文长度。"""
 
     return settings.fetch_min_content_chars
+
+
+def get_ai_service() -> AIService:
+    """根据本机环境变量构建 OpenAI-compatible AI Service。"""
+
+    return AIService(
+        OpenAICompatibleClient(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+    )

@@ -1,10 +1,13 @@
 import hashlib
 import logging
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.ai.errors import AIError
+from app.ai.schemas import AIArticleResult
+from app.ai.service import ArticleAIProcessor
 from app.core.exceptions import (
     ArticleAlreadyExistsError,
     ArticleNotFoundError,
@@ -14,6 +17,8 @@ from app.crawler.cleaner import ContentValidationError, clean_and_validate_conte
 from app.crawler.errors import CrawlerError
 from app.crawler.service import CrawlerService
 from app.models.article import Article
+from app.models.article_tag import ArticleTag
+from app.models.tag import Tag
 from app.schemas.article import ArticleCreate, ArticleUpdate
 
 
@@ -21,6 +26,7 @@ PENDING_STATUS = "pending"
 PROCESSING_STATUS = "processing"
 COMPLETED_STATUS = "completed"
 FAILED_STATUS = "failed"
+PARTIAL_FAILED_STATUS = "partial_failed"
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +128,20 @@ class ArticleService:
         return article
 
     @classmethod
+    def create_and_process(
+        cls,
+        session: Session,
+        payload: ArticleCreate,
+        user_id: int,
+        crawler: CrawlerService,
+        ai_service: ArticleAIProcessor,
+    ) -> Article:
+        """同步执行创建、正文获取和 AI 分析主链路。"""
+
+        article = cls.create_and_fetch(session, payload, user_id, crawler)
+        return cls.process_ai_if_ready(session, article, ai_service)
+
+    @classmethod
     def set_manual_content(
         cls,
         session: Session,
@@ -155,6 +175,115 @@ class ArticleService:
         cls._commit(session)
         session.refresh(article)
         return article
+
+    @classmethod
+    def set_manual_content_and_process(
+        cls,
+        session: Session,
+        article_id: int,
+        user_id: int,
+        content: str,
+        min_content_chars: int,
+        ai_service: ArticleAIProcessor,
+    ) -> Article:
+        """保存手动正文后同步进入 AI 分析。"""
+
+        article = cls.set_manual_content(
+            session,
+            article_id,
+            user_id,
+            content,
+            min_content_chars,
+        )
+        return cls.process_ai_if_ready(session, article, ai_service)
+
+    @classmethod
+    def process_ai_if_ready(
+        cls,
+        session: Session,
+        article: Article,
+        ai_service: ArticleAIProcessor,
+    ) -> Article:
+        """仅对已获得有效正文的 Article 执行 AI，并安全持久化状态。"""
+
+        if article.fetch_status != COMPLETED_STATUS or not article.clean_content:
+            return article
+
+        article.status = PROCESSING_STATUS
+        article.ai_status = PROCESSING_STATUS
+        article.ai_error = None
+        cls._commit(session)
+
+        try:
+            result = ai_service.generate_article_result(article.clean_content)
+        except AIError as exc:
+            cls._mark_ai_failed(session, article, str(exc))
+        except Exception:
+            logger.exception("Article %s AI 处理发生未预期异常", article.id)
+            cls._mark_ai_failed(session, article, "AI 处理失败")
+        else:
+            cls._apply_ai_result(session, article, result)
+
+        session.refresh(article)
+        return article
+
+    @classmethod
+    def _apply_ai_result(
+        cls,
+        session: Session,
+        article: Article,
+        result: AIArticleResult,
+    ) -> None:
+        article.one_sentence_summary = result.one_sentence_summary
+        article.key_points = result.key_points
+        article.detailed_summary = result.detailed_summary
+        article.ai_status = COMPLETED_STATUS
+        article.ai_error = None
+        article.embedding_status = PENDING_STATUS
+        article.embedding_error = None
+        article.status = PROCESSING_STATUS
+        cls._replace_ai_tags(session, article, result.tags)
+        cls._commit(session)
+        session.expire(article, ["tags"])
+
+    @classmethod
+    def _mark_ai_failed(
+        cls,
+        session: Session,
+        article: Article,
+        error_message: str,
+    ) -> None:
+        article.status = PARTIAL_FAILED_STATUS
+        article.ai_status = FAILED_STATUS
+        article.ai_error = error_message
+        article.embedding_status = PENDING_STATUS
+        cls._commit(session)
+
+    @staticmethod
+    def _replace_ai_tags(
+        session: Session,
+        article: Article,
+        tag_names: list[str],
+    ) -> None:
+        existing_tags = session.scalars(
+            select(Tag).where(
+                Tag.user_id == article.user_id,
+                Tag.name.in_(tag_names),
+            )
+        ).all()
+        tags_by_name = {tag.name: tag for tag in existing_tags}
+
+        session.execute(
+            delete(ArticleTag).where(ArticleTag.article_id == article.id)
+        )
+        for tag_name in tag_names:
+            tag = tags_by_name.get(tag_name)
+            if tag is None:
+                tag = Tag(user_id=article.user_id, name=tag_name)
+                session.add(tag)
+                session.flush()
+                tags_by_name[tag_name] = tag
+            session.add(ArticleTag(article_id=article.id, tag_id=tag.id))
 
     @classmethod
     def _mark_fetch_failed(

@@ -1,7 +1,15 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
 SourceType = Annotated[
@@ -99,6 +107,7 @@ class ArticleDetail(BaseModel):
     one_sentence_summary: str | None
     detailed_summary: str | None
     key_points: list[str] | None
+    tags: list[str] = Field(default_factory=list)
     favorite: bool
     status: str
     fetch_status: str
@@ -109,6 +118,13 @@ class ArticleDetail(BaseModel):
     embedding_error: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def serialize_tag_names(cls, tags: object) -> object:
+        if isinstance(tags, list):
+            return [getattr(tag, "name", tag) for tag in tags]
+        return tags
 
 
 class ArticleStatus(BaseModel):

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     fetch_min_content_chars: int = Field(default=200, ge=1, le=10_000)
     playwright_navigation_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     playwright_network_idle_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    llm_base_url: str = ""
+    llm_api_key: SecretStr = SecretStr("")
+    llm_model: str = ""
+    llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     fetch_user_agent: str = Field(
         default=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

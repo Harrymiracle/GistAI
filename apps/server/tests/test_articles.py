@@ -40,7 +40,9 @@ def test_create_success(client: TestClient) -> None:
     assert body["data"]["favorite"] is True
     assert body["data"]["status"] == "processing"
     assert body["data"]["fetch_status"] == "completed"
-    assert body["data"]["ai_status"] == "pending"
+    assert body["data"]["ai_status"] == "completed"
+    assert body["data"]["one_sentence_summary"] == "测试文章的一句话总结。"
+    assert set(body["data"]["tags"]) == {"测试", "AI"}
     assert body["data"]["embedding_status"] == "pending"
 
 
@@ -132,7 +134,7 @@ def test_status_and_status_404(client: TestClient) -> None:
         "id": article["id"],
         "status": "processing",
         "fetch_status": "completed",
-        "ai_status": "pending",
+        "ai_status": "completed",
         "embedding_status": "pending",
         "fetch_error": None,
         "ai_error": None,

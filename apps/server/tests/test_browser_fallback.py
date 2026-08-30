@@ -122,7 +122,7 @@ def test_playwright_fallback_persists_content_hash_and_final_status(
     assert data["fetch_status"] == "completed"
     assert data["fetch_error"] is None
     assert data["status"] == "processing"
-    assert data["ai_status"] == "pending"
+    assert data["ai_status"] == "completed"
     assert data["embedding_status"] == "pending"
     assert data["content_hash"] == expected_hash
 

@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    get_ai_service,
     get_crawler_service,
     get_current_user_id,
     get_db,
     get_min_content_chars,
 )
+from app.ai.service import AIService
 from app.crawler.service import CrawlerService
 from app.schemas.article import (
     ArticleCreate,
@@ -28,6 +30,7 @@ router = APIRouter(prefix="/articles", tags=["articles"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
 ArticleCrawler = Annotated[CrawlerService, Depends(get_crawler_service)]
+ArticleAI = Annotated[AIService, Depends(get_ai_service)]
 MinimumContentChars = Annotated[int, Depends(get_min_content_chars)]
 ArticleProcessingStatus = Literal[
     "pending",
@@ -48,10 +51,17 @@ def create_article(
     session: DatabaseSession,
     user_id: CurrentUserId,
     crawler: ArticleCrawler,
+    ai_service: ArticleAI,
 ) -> ApiResponse[ArticleDetail]:
     """创建一篇待处理的 Article。"""
 
-    article = ArticleService.create_and_fetch(session, payload, user_id, crawler)
+    article = ArticleService.create_and_process(
+        session,
+        payload,
+        user_id,
+        crawler,
+        ai_service,
+    )
     return ApiResponse(
         code=20100,
         message="Article 创建成功",
@@ -69,15 +79,17 @@ def set_manual_content(
     session: DatabaseSession,
     user_id: CurrentUserId,
     min_content_chars: MinimumContentChars,
+    ai_service: ArticleAI,
 ) -> ApiResponse[ArticleDetail]:
     """使用清洗并校验后的手动正文恢复 Article 处理链路。"""
 
-    article = ArticleService.set_manual_content(
+    article = ArticleService.set_manual_content_and_process(
         session,
         article_id,
         user_id,
         payload.content,
         min_content_chars,
+        ai_service,
     )
     return ApiResponse(
         code=20000,
