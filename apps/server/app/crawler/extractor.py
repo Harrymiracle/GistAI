@@ -1,4 +1,3 @@
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -6,11 +5,12 @@ from urllib.parse import urlsplit
 import trafilatura
 from trafilatura.metadata import extract_metadata
 
-from app.crawler.cleaner import clean_text
+from app.crawler.cleaner import (
+    ContentValidationError,
+    clean_and_validate_content,
+    clean_text,
+)
 from app.crawler.errors import ExtractionError
-
-
-NON_WHITESPACE = re.compile(r"\s")
 
 
 @dataclass(frozen=True)
@@ -45,12 +45,14 @@ class ArticleExtractor:
         if not extracted:
             raise ExtractionError("未能从网页中提取正文")
 
-        clean_content = clean_text(extracted)
-        effective_length = len(NON_WHITESPACE.sub("", clean_content))
-        if effective_length < self._min_content_chars:
-            raise ExtractionError(
-                f"提取正文过短，至少需要 {self._min_content_chars} 个非空白字符"
+        try:
+            clean_content = clean_and_validate_content(
+                extracted,
+                self._min_content_chars,
+                content_label="提取正文",
             )
+        except ContentValidationError as exc:
+            raise ExtractionError(str(exc)) from exc
 
         title, author, published_at, source_name = self._extract_metadata(
             html_content,

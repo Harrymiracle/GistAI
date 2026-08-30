@@ -5,7 +5,12 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ArticleAlreadyExistsError, ArticleNotFoundError
+from app.core.exceptions import (
+    ArticleAlreadyExistsError,
+    ArticleNotFoundError,
+    ManualContentInvalidError,
+)
+from app.crawler.cleaner import ContentValidationError, clean_and_validate_content
 from app.crawler.errors import CrawlerError
 from app.crawler.service import CrawlerService
 from app.models.article import Article
@@ -99,9 +104,7 @@ class ArticleService:
             cls._mark_fetch_failed(session, article, "网页抓取处理失败")
         else:
             article.clean_content = extracted.clean_content
-            article.content_hash = hashlib.sha256(
-                extracted.clean_content.encode("utf-8")
-            ).hexdigest()
+            article.content_hash = cls._content_hash(extracted.clean_content)
             article.fetch_status = COMPLETED_STATUS
             article.fetch_error = None
             article.status = PROCESSING_STATUS
@@ -119,6 +122,41 @@ class ArticleService:
         return article
 
     @classmethod
+    def set_manual_content(
+        cls,
+        session: Session,
+        article_id: int,
+        user_id: int,
+        content: str,
+        min_content_chars: int,
+    ) -> Article:
+        """校验完成后原子替换正文，并恢复抓取阶段成功状态。"""
+
+        article = cls.get_article(session, article_id, user_id)
+        try:
+            clean_content = clean_and_validate_content(
+                content,
+                min_content_chars,
+                content_label="手动正文",
+            )
+        except ContentValidationError as exc:
+            raise ManualContentInvalidError(str(exc)) from exc
+
+        content_hash = cls._content_hash(clean_content)
+        article.clean_content = clean_content
+        article.content_hash = content_hash
+        article.status = PROCESSING_STATUS
+        article.fetch_status = COMPLETED_STATUS
+        article.fetch_error = None
+        article.ai_status = PENDING_STATUS
+        article.ai_error = None
+        article.embedding_status = PENDING_STATUS
+        article.embedding_error = None
+        cls._commit(session)
+        session.refresh(article)
+        return article
+
+    @classmethod
     def _mark_fetch_failed(
         cls,
         session: Session,
@@ -129,6 +167,10 @@ class ArticleService:
         article.fetch_status = FAILED_STATUS
         article.fetch_error = error_message
         cls._commit(session)
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
     def list_articles(

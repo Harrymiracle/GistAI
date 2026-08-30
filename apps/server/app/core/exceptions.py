@@ -40,3 +40,14 @@ class ArticleAlreadyExistsError(AppError):
             message="Article 已存在",
             data={"article_id": article_id},
         )
+
+
+class ManualContentInvalidError(AppError):
+    """手动正文清洗后无效。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status_code=422,
+            code=42202,
+            message=message,
+        )

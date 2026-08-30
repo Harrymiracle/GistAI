@@ -47,3 +47,9 @@ def get_crawler_service() -> CrawlerService:
             user_agent=settings.fetch_user_agent,
         ),
     )
+
+
+def get_min_content_chars() -> int:
+    """返回网页提取和手动正文共用的最小正文长度。"""
+
+    return settings.fetch_min_content_chars

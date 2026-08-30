@@ -3,7 +3,12 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_crawler_service, get_current_user_id, get_db
+from app.api.deps import (
+    get_crawler_service,
+    get_current_user_id,
+    get_db,
+    get_min_content_chars,
+)
 from app.crawler.service import CrawlerService
 from app.schemas.article import (
     ArticleCreate,
@@ -11,6 +16,7 @@ from app.schemas.article import (
     ArticleDetail,
     ArticleListData,
     ArticleListItem,
+    ManualContentRequest,
     ArticleStatus,
     ArticleUpdate,
 )
@@ -22,6 +28,7 @@ router = APIRouter(prefix="/articles", tags=["articles"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
 ArticleCrawler = Annotated[CrawlerService, Depends(get_crawler_service)]
+MinimumContentChars = Annotated[int, Depends(get_min_content_chars)]
 ArticleProcessingStatus = Literal[
     "pending",
     "processing",
@@ -48,6 +55,33 @@ def create_article(
     return ApiResponse(
         code=20100,
         message="Article 创建成功",
+        data=ArticleDetail.model_validate(article),
+    )
+
+
+@router.post(
+    "/{article_id}/manual-content",
+    response_model=ApiResponse[ArticleDetail],
+)
+def set_manual_content(
+    article_id: int,
+    payload: ManualContentRequest,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+    min_content_chars: MinimumContentChars,
+) -> ApiResponse[ArticleDetail]:
+    """使用清洗并校验后的手动正文恢复 Article 处理链路。"""
+
+    article = ArticleService.set_manual_content(
+        session,
+        article_id,
+        user_id,
+        payload.content,
+        min_content_chars,
+    )
+    return ApiResponse(
+        code=20000,
+        message="手动正文保存成功",
         data=ArticleDetail.model_validate(article),
     )
 

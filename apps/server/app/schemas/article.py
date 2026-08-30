@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, HttpUrl, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, model_validator
 
 
 SourceType = Annotated[
@@ -44,6 +44,12 @@ class ArticleUpdate(BaseModel):
         if not self.model_fields_set:
             raise ValueError("至少提供一个可修改字段")
         return self
+
+
+class ManualContentRequest(BaseModel):
+    """用户提交手动正文的请求参数。"""
+
+    content: str = Field(min_length=1)
 
 
 class ArticleListItem(BaseModel):
@@ -124,4 +130,3 @@ class ArticleDeleteResult(BaseModel):
     """删除 Article 的结果。"""
 
     article_id: int
-
