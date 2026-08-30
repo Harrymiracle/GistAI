@@ -20,6 +20,7 @@ from app.schemas.article import (
     ArticleDetail,
     ArticleListData,
     ArticleListItem,
+    ArticleReprocessData,
     ManualContentRequest,
     ArticleStatus,
     ArticleUpdate,
@@ -101,6 +102,106 @@ def set_manual_content(
     return ApiResponse(
         code=20000,
         message="手动正文保存成功",
+        data=ArticleDetail.model_validate(article),
+    )
+
+
+@router.post(
+    "/{article_id}/reprocess",
+    response_model=ApiResponse[ArticleReprocessData],
+)
+def reprocess_article(
+    article_id: int,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+    crawler: ArticleCrawler,
+    ai_service: ArticleAI,
+    embedding_service: ArticleEmbedding,
+) -> ApiResponse[ArticleReprocessData]:
+    """重新抓取并在完整 Pipeline 成功后原子替换旧结果。"""
+
+    article, content_unchanged = ArticleService.reprocess(
+        session,
+        article_id,
+        user_id,
+        crawler,
+        ai_service,
+        embedding_service,
+    )
+    if content_unchanged:
+        message = "Article 正文未变化，已跳过 AI 与 Embedding"
+    elif article.status == "completed":
+        message = "Article 重处理成功"
+    else:
+        message = "Article 重处理结束，部分阶段失败"
+    return ApiResponse(
+        code=20000,
+        message=message,
+        data=ArticleReprocessData(
+            content_unchanged=content_unchanged,
+            article=ArticleDetail.model_validate(article),
+        ),
+    )
+
+
+@router.post(
+    "/{article_id}/regenerate-ai",
+    response_model=ApiResponse[ArticleDetail],
+)
+def regenerate_article_ai(
+    article_id: int,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+    min_content_chars: MinimumContentChars,
+    ai_service: ArticleAI,
+) -> ApiResponse[ArticleDetail]:
+    """仅使用当前正文重新生成 AI 字段和标签。"""
+
+    article = ArticleService.regenerate_ai(
+        session,
+        article_id,
+        user_id,
+        min_content_chars,
+        ai_service,
+    )
+    return ApiResponse(
+        code=20000,
+        message=(
+            "Article AI 重新生成成功"
+            if article.ai_status == "completed"
+            else "Article AI 重新生成失败"
+        ),
+        data=ArticleDetail.model_validate(article),
+    )
+
+
+@router.post(
+    "/{article_id}/regenerate-embedding",
+    response_model=ApiResponse[ArticleDetail],
+)
+def regenerate_article_embedding(
+    article_id: int,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+    min_content_chars: MinimumContentChars,
+    embedding_service: ArticleEmbedding,
+) -> ApiResponse[ArticleDetail]:
+    """仅使用当前正文重新生成 chunks 与 vectors。"""
+
+    article = ArticleService.regenerate_embedding(
+        session,
+        article_id,
+        user_id,
+        min_content_chars,
+        embedding_service,
+    )
+    return ApiResponse(
+        code=20000,
+        message=(
+            "Article Embedding 重新生成成功"
+            if article.embedding_status == "completed"
+            else "Article Embedding 重新生成失败"
+        ),
         data=ArticleDetail.model_validate(article),
     )
 

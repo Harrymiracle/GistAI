@@ -42,6 +42,35 @@ class ArticleAlreadyExistsError(AppError):
         )
 
 
+class ArticleProcessingConflictError(AppError):
+    """Article 当前已有同步处理操作。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            code=40903,
+            message="Article 正在处理中，请勿重复操作",
+        )
+
+
+class ArticleContentUnavailableError(AppError):
+    """Article 没有可用于重新生成的有效正文。"""
+
+    def __init__(self, message: str = "Article 没有有效正文") -> None:
+        super().__init__(status_code=422, code=42203, message=message)
+
+
+class ArticleSourceUrlInvalidError(AppError):
+    """Article 没有可供重新抓取的 HTTP URL。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=422,
+            code=42204,
+            message="Article 没有可重新抓取的有效 URL",
+        )
+
+
 class ManualContentInvalidError(AppError):
     """手动正文清洗后无效。"""
 

@@ -146,3 +146,10 @@ class ArticleDeleteResult(BaseModel):
     """删除 Article 的结果。"""
 
     article_id: int
+
+
+class ArticleReprocessData(BaseModel):
+    """完整重处理结果，并明确正文是否未变化。"""
+
+    content_unchanged: bool
+    article: ArticleDetail
