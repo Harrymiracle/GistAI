@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=10, ge=1, le=100)
     rag_chunk_size: int = Field(default=400, ge=1, le=8192)
     rag_chunk_overlap: int = Field(default=80, ge=0, le=8191)
+    rag_top_k: int = Field(default=3, ge=1, le=50)
+    rag_similarity_threshold: float = Field(default=0.35, ge=-1.0, le=1.0)
     fetch_user_agent: str = Field(
         default=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -9,6 +9,8 @@ from pydantic import (
     field_validator,
 )
 
+from app.core.config import settings
+
 
 Keyword = Annotated[
     str,
@@ -55,3 +57,38 @@ class KeywordSearchData(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+SemanticQuery = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
+]
+
+
+class SemanticSearchRequest(BaseModel):
+    """语义搜索请求。"""
+
+    query: SemanticQuery
+    top_k: int = Field(default=settings.rag_top_k, ge=1, le=50)
+
+
+class SemanticSearchItem(BaseModel):
+    """每篇 Article 仅保留最高分 Chunk 的语义搜索结果。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    article_id: int
+    title: str | None
+    chunk_id: int
+    chunk_index: int
+    excerpt: str
+    score: float
+    one_sentence_summary: str | None
+    source_url: str
+    source_name: str | None
+
+
+class SemanticSearchData(BaseModel):
+    items: list[SemanticSearchItem]
+    top_k: int
+    similarity_threshold: float

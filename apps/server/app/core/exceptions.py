@@ -74,3 +74,14 @@ class TagAlreadyExistsError(AppError):
             message="Tag 已存在",
             data={"tag_id": tag_id},
         )
+
+
+class SemanticSearchEmbeddingError(AppError):
+    """语义搜索生成查询向量失败。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status_code=502,
+            code=50201,
+            message=message,
+        )

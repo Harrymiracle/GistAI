@@ -56,3 +56,11 @@ class EmbeddingService:
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
+
+    def embed_query(self, query: str) -> list[float]:
+        """复用文章 Embedding Client 生成单条只读查询向量。"""
+
+        vectors = self._client.embed([query])
+        if len(vectors) != 1:
+            raise EmbeddingResponseError("Embedding 返回数量与输入不一致")
+        return vectors[0]
