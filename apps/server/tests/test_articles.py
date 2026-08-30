@@ -38,8 +38,8 @@ def test_create_success(client: TestClient) -> None:
     assert body["code"] == 20100
     assert body["data"]["user_id"] == 1
     assert body["data"]["favorite"] is True
-    assert body["data"]["status"] == "pending"
-    assert body["data"]["fetch_status"] == "pending"
+    assert body["data"]["status"] == "processing"
+    assert body["data"]["fetch_status"] == "completed"
     assert body["data"]["ai_status"] == "pending"
     assert body["data"]["embedding_status"] == "pending"
 
@@ -130,8 +130,8 @@ def test_status_and_status_404(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["data"] == {
         "id": article["id"],
-        "status": "pending",
-        "fetch_status": "pending",
+        "status": "processing",
+        "fetch_status": "completed",
         "ai_status": "pending",
         "embedding_status": "pending",
         "fetch_error": None,

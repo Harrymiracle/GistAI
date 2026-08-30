@@ -1,20 +1,29 @@
+import hashlib
+import logging
+
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ArticleAlreadyExistsError, ArticleNotFoundError
+from app.crawler.errors import CrawlerError
+from app.crawler.service import CrawlerService
 from app.models.article import Article
 from app.schemas.article import ArticleCreate, ArticleUpdate
 
 
 PENDING_STATUS = "pending"
+PROCESSING_STATUS = "processing"
+COMPLETED_STATUS = "completed"
+FAILED_STATUS = "failed"
+logger = logging.getLogger(__name__)
 
 
 class ArticleService:
     """Article 基础 CRUD 业务。"""
 
     @staticmethod
-    def create_article(
+    def _create_pending_article(
         session: Session,
         payload: ArticleCreate,
         user_id: int,
@@ -64,6 +73,62 @@ class ArticleService:
 
         session.refresh(article)
         return article
+
+    @classmethod
+    def create_and_fetch(
+        cls,
+        session: Session,
+        payload: ArticleCreate,
+        user_id: int,
+        crawler: CrawlerService,
+    ) -> Article:
+        """先持久化 Article，再同步执行普通 HTTP 抓取。"""
+
+        article = cls._create_pending_article(session, payload, user_id)
+        article.status = PROCESSING_STATUS
+        article.fetch_status = PROCESSING_STATUS
+        article.fetch_error = None
+        cls._commit(session)
+
+        try:
+            extracted = crawler.fetch_article(article.source_url)
+        except CrawlerError as exc:
+            cls._mark_fetch_failed(session, article, str(exc))
+        except Exception:
+            logger.exception("Article %s 抓取发生未预期异常", article.id)
+            cls._mark_fetch_failed(session, article, "网页抓取处理失败")
+        else:
+            article.clean_content = extracted.clean_content
+            article.content_hash = hashlib.sha256(
+                extracted.clean_content.encode("utf-8")
+            ).hexdigest()
+            article.fetch_status = COMPLETED_STATUS
+            article.fetch_error = None
+            article.status = PROCESSING_STATUS
+            if article.title is None:
+                article.title = extracted.title
+            if article.author is None:
+                article.author = extracted.author
+            if article.published_at is None:
+                article.published_at = extracted.published_at
+            if article.source_name is None:
+                article.source_name = extracted.source_name
+            cls._commit(session)
+
+        session.refresh(article)
+        return article
+
+    @classmethod
+    def _mark_fetch_failed(
+        cls,
+        session: Session,
+        article: Article,
+        error_message: str,
+    ) -> None:
+        article.status = FAILED_STATUS
+        article.fetch_status = FAILED_STATUS
+        article.fetch_error = error_message
+        cls._commit(session)
 
     @staticmethod
     def list_articles(

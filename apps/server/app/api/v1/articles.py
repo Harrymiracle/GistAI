@@ -3,7 +3,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user_id, get_db
+from app.api.deps import get_crawler_service, get_current_user_id, get_db
+from app.crawler.service import CrawlerService
 from app.schemas.article import (
     ArticleCreate,
     ArticleDeleteResult,
@@ -20,6 +21,7 @@ from app.services.article import ArticleService
 router = APIRouter(prefix="/articles", tags=["articles"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
+ArticleCrawler = Annotated[CrawlerService, Depends(get_crawler_service)]
 ArticleProcessingStatus = Literal[
     "pending",
     "processing",
@@ -38,10 +40,11 @@ def create_article(
     payload: ArticleCreate,
     session: DatabaseSession,
     user_id: CurrentUserId,
+    crawler: ArticleCrawler,
 ) -> ApiResponse[ArticleDetail]:
     """创建一篇待处理的 Article。"""
 
-    article = ArticleService.create_article(session, payload, user_id)
+    article = ArticleService.create_and_fetch(session, payload, user_id, crawler)
     return ApiResponse(
         code=20100,
         message="Article 创建成功",
