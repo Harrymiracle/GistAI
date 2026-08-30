@@ -51,3 +51,26 @@ class ManualContentInvalidError(AppError):
             code=42202,
             message=message,
         )
+
+
+class TagNotFoundError(AppError):
+    """Tag 不存在。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=404,
+            code=40402,
+            message="Tag 不存在",
+        )
+
+
+class TagAlreadyExistsError(AppError):
+    """同一用户已存在同名 Tag。"""
+
+    def __init__(self, tag_id: int) -> None:
+        super().__init__(
+            status_code=409,
+            code=40902,
+            message="Tag 已存在",
+            data={"tag_id": tag_id},
+        )
