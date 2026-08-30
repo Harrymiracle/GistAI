@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import SemanticSearchEmbeddingError
@@ -9,6 +9,8 @@ from app.embedding.client import VECTOR_DIMENSION
 from app.embedding.errors import EmbeddingError, EmbeddingResponseError
 from app.models.article import Article
 from app.models.article_chunk import ArticleChunk
+from app.models.article_tag import ArticleTag
+from app.models.tag import Tag
 
 
 LIKE_ESCAPE = "\\"
@@ -90,6 +92,8 @@ class SearchService:
         top_k: int,
         similarity_threshold: float,
         embedding_service: QueryEmbeddingService,
+        favorite_only: bool = False,
+        tag_ids: list[int] | None = None,
     ) -> list[SemanticSearchHit]:
         """生成 query vector，并按余弦相似度返回每篇文章的最佳切片。"""
 
@@ -111,6 +115,27 @@ class SearchService:
                 ArticleChunk.id.asc(),
             ),
         )
+        filters = [
+            Article.user_id == user_id,
+            Article.embedding_status == "completed",
+            ArticleChunk.embedding.is_not(None),
+            distance <= 1.0 - similarity_threshold,
+        ]
+        if favorite_only:
+            filters.append(Article.favorite.is_(True))
+        if tag_ids:
+            filters.append(
+                exists(
+                    select(ArticleTag.article_id)
+                    .join(Tag, Tag.id == ArticleTag.tag_id)
+                    .where(
+                        ArticleTag.article_id == Article.id,
+                        ArticleTag.tag_id.in_(tag_ids),
+                        Tag.user_id == user_id,
+                    )
+                )
+            )
+
         ranked = (
             select(
                 Article.id.label("article_id"),
@@ -125,12 +150,7 @@ class SearchService:
                 article_rank.label("article_rank"),
             )
             .join(Article, Article.id == ArticleChunk.article_id)
-            .where(
-                Article.user_id == user_id,
-                Article.embedding_status == "completed",
-                ArticleChunk.embedding.is_not(None),
-                distance <= 1.0 - similarity_threshold,
-            )
+            .where(*filters)
             .subquery()
         )
         rows = session.execute(

@@ -85,3 +85,10 @@ class SemanticSearchEmbeddingError(AppError):
             code=50201,
             message=message,
         )
+
+
+class RAGLLMError(AppError):
+    """RAG 生成回答时的安全 LLM 错误。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(status_code=502, code=50202, message=message)

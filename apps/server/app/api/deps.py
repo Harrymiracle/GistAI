@@ -1,5 +1,6 @@
 from collections.abc import Generator
 
+from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.ai.client import OpenAICompatibleClient
@@ -13,6 +14,7 @@ from app.db.session import SessionLocal
 from app.embedding.chunker import TokenChunker
 from app.embedding.client import OpenAICompatibleEmbeddingClient
 from app.embedding.service import EmbeddingService
+from app.rag.service import RAGService
 
 
 DEFAULT_USER_ID = 1
@@ -89,4 +91,18 @@ def get_embedding_service() -> EmbeddingService:
             timeout_seconds=settings.embedding_timeout_seconds,
         ),
         batch_size=settings.embedding_batch_size,
+    )
+
+
+def get_rag_service(
+    ai_service: AIService = Depends(get_ai_service),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+) -> RAGService:
+    """构建复用现有 AI 与 Embedding 能力的单轮 RAG Service。"""
+
+    return RAGService(
+        embedding_service=embedding_service,
+        ai_service=ai_service,
+        similarity_threshold=settings.rag_similarity_threshold,
+        max_context_chars=settings.rag_max_context_chars,
     )
