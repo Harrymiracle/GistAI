@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from app.api.v1.router import api_router
+from app.core.handlers import register_exception_handlers
+
 
 class HealthResponse(BaseModel):
     """健康检查响应。"""
@@ -9,6 +12,8 @@ class HealthResponse(BaseModel):
 
 
 app = FastAPI(title="GistAI API")
+register_exception_handlers(app)
+app.include_router(api_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
