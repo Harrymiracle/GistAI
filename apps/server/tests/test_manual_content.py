@@ -68,10 +68,10 @@ def test_failed_article_accepts_manual_content_and_persists_hash(
     assert data["clean_content"] == expected_content
     assert data["content_hash"] == expected_hash
     assert data["fetch_status"] == "completed"
-    assert data["status"] == "processing"
+    assert data["status"] == "completed"
     assert data["fetch_error"] is None
     assert data["ai_status"] == "completed"
-    assert data["embedding_status"] == "pending"
+    assert data["embedding_status"] == "completed"
     assert data["source_type"] == "web"
 
     persisted = db_session.scalar(select(Article).where(Article.id == article.id))

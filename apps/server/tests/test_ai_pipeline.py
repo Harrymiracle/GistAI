@@ -80,9 +80,9 @@ def test_ai_success_persists_summaries_key_points_and_tags(
     assert set(data["tags"]) == {"AI", "摘要"}
     assert data["ai_status"] == "completed"
     assert data["ai_error"] is None
-    assert data["status"] == "processing"
+    assert data["status"] == "completed"
     assert data["fetch_status"] == "completed"
-    assert data["embedding_status"] == "pending"
+    assert data["embedding_status"] == "completed"
 
     persisted = db_session.scalar(select(Article).where(Article.id == data["id"]))
     assert persisted is not None

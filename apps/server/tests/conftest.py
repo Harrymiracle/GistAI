@@ -5,9 +5,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.ai.schemas import AIArticleResult
-from app.api.deps import get_ai_service, get_crawler_service, get_db
+from app.api.deps import (
+    get_ai_service,
+    get_crawler_service,
+    get_db,
+    get_embedding_service,
+)
 from app.crawler.extractor import ExtractedArticle
 from app.db.session import engine
+from app.embedding.schemas import EmbeddedChunk
 from app.main import app
 
 
@@ -32,6 +38,21 @@ class SuccessfulAIStub:
             detailed_summary="这是用于自动化回归测试的详细摘要。",
             tags=["测试", "AI"],
         )
+
+
+class SuccessfulEmbeddingStub:
+    """为既有 API 回归测试提供不消耗 Token 的 1024 维向量。"""
+
+    def generate(self, clean_content: str) -> list[EmbeddedChunk]:
+        return [
+            EmbeddedChunk(
+                chunk_index=0,
+                content=clean_content,
+                token_count=len(clean_content),
+                embedding=[0.01] * 1024,
+                metadata={"tokenizer": "test-stub"},
+            )
+        ]
 
 
 @pytest.fixture
@@ -64,6 +85,7 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawler_service] = SuccessfulCrawlerStub
     app.dependency_overrides[get_ai_service] = SuccessfulAIStub
+    app.dependency_overrides[get_embedding_service] = SuccessfulEmbeddingStub
     try:
         with TestClient(app) as test_client:
             yield test_client

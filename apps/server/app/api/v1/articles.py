@@ -8,10 +8,12 @@ from app.api.deps import (
     get_crawler_service,
     get_current_user_id,
     get_db,
+    get_embedding_service,
     get_min_content_chars,
 )
 from app.ai.service import AIService
 from app.crawler.service import CrawlerService
+from app.embedding.service import EmbeddingService
 from app.schemas.article import (
     ArticleCreate,
     ArticleDeleteResult,
@@ -31,6 +33,7 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
 ArticleCrawler = Annotated[CrawlerService, Depends(get_crawler_service)]
 ArticleAI = Annotated[AIService, Depends(get_ai_service)]
+ArticleEmbedding = Annotated[EmbeddingService, Depends(get_embedding_service)]
 MinimumContentChars = Annotated[int, Depends(get_min_content_chars)]
 ArticleProcessingStatus = Literal[
     "pending",
@@ -52,6 +55,7 @@ def create_article(
     user_id: CurrentUserId,
     crawler: ArticleCrawler,
     ai_service: ArticleAI,
+    embedding_service: ArticleEmbedding,
 ) -> ApiResponse[ArticleDetail]:
     """创建一篇待处理的 Article。"""
 
@@ -61,6 +65,7 @@ def create_article(
         user_id,
         crawler,
         ai_service,
+        embedding_service,
     )
     return ApiResponse(
         code=20100,
@@ -80,6 +85,7 @@ def set_manual_content(
     user_id: CurrentUserId,
     min_content_chars: MinimumContentChars,
     ai_service: ArticleAI,
+    embedding_service: ArticleEmbedding,
 ) -> ApiResponse[ArticleDetail]:
     """使用清洗并校验后的手动正文恢复 Article 处理链路。"""
 
@@ -90,6 +96,7 @@ def set_manual_content(
         payload.content,
         min_content_chars,
         ai_service,
+        embedding_service,
     )
     return ApiResponse(
         code=20000,

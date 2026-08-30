@@ -121,9 +121,9 @@ def test_playwright_fallback_persists_content_hash_and_final_status(
     expected_hash = hashlib.sha256(data["clean_content"].encode("utf-8")).hexdigest()
     assert data["fetch_status"] == "completed"
     assert data["fetch_error"] is None
-    assert data["status"] == "processing"
+    assert data["status"] == "completed"
     assert data["ai_status"] == "completed"
-    assert data["embedding_status"] == "pending"
+    assert data["embedding_status"] == "completed"
     assert data["content_hash"] == expected_hash
 
     persisted = db_session.scalar(select(Article).where(Article.id == data["id"]))

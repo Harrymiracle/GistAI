@@ -10,6 +10,9 @@ from app.crawler.extractor import ArticleExtractor
 from app.crawler.http_fetcher import HttpFetcher
 from app.crawler.service import CrawlerService
 from app.db.session import SessionLocal
+from app.embedding.chunker import TokenChunker
+from app.embedding.client import OpenAICompatibleEmbeddingClient
+from app.embedding.service import EmbeddingService
 
 
 DEFAULT_USER_ID = 1
@@ -67,4 +70,23 @@ def get_ai_service() -> AIService:
             model=settings.llm_model,
             timeout_seconds=settings.llm_timeout_seconds,
         )
+    )
+
+
+def get_embedding_service() -> EmbeddingService:
+    """根据本机配置构建 token 切片与 OpenAI-compatible Embedding Service。"""
+
+    return EmbeddingService(
+        chunker=TokenChunker(
+            chunk_size=settings.rag_chunk_size,
+            overlap=settings.rag_chunk_overlap,
+        ),
+        client=OpenAICompatibleEmbeddingClient(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            timeout_seconds=settings.embedding_timeout_seconds,
+        ),
+        batch_size=settings.embedding_batch_size,
     )

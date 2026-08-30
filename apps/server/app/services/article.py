@@ -16,7 +16,11 @@ from app.core.exceptions import (
 from app.crawler.cleaner import ContentValidationError, clean_and_validate_content
 from app.crawler.errors import CrawlerError
 from app.crawler.service import CrawlerService
+from app.embedding.errors import EmbeddingError
+from app.embedding.schemas import EmbeddedChunk
+from app.embedding.service import ArticleEmbeddingProcessor
 from app.models.article import Article
+from app.models.article_chunk import ArticleChunk
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 from app.schemas.article import ArticleCreate, ArticleUpdate
@@ -135,11 +139,13 @@ class ArticleService:
         user_id: int,
         crawler: CrawlerService,
         ai_service: ArticleAIProcessor,
+        embedding_service: ArticleEmbeddingProcessor,
     ) -> Article:
-        """同步执行创建、正文获取和 AI 分析主链路。"""
+        """同步执行创建、正文获取、AI 分析和 Embedding 主链路。"""
 
         article = cls.create_and_fetch(session, payload, user_id, crawler)
-        return cls.process_ai_if_ready(session, article, ai_service)
+        article = cls.process_ai_if_ready(session, article, ai_service)
+        return cls.process_embedding_if_ready(session, article, embedding_service)
 
     @classmethod
     def set_manual_content(
@@ -185,8 +191,9 @@ class ArticleService:
         content: str,
         min_content_chars: int,
         ai_service: ArticleAIProcessor,
+        embedding_service: ArticleEmbeddingProcessor,
     ) -> Article:
-        """保存手动正文后同步进入 AI 分析。"""
+        """保存手动正文后同步进入 AI 与 Embedding 分析。"""
 
         article = cls.set_manual_content(
             session,
@@ -195,7 +202,8 @@ class ArticleService:
             content,
             min_content_chars,
         )
-        return cls.process_ai_if_ready(session, article, ai_service)
+        article = cls.process_ai_if_ready(session, article, ai_service)
+        return cls.process_embedding_if_ready(session, article, embedding_service)
 
     @classmethod
     def process_ai_if_ready(
@@ -257,6 +265,86 @@ class ArticleService:
         article.ai_status = FAILED_STATUS
         article.ai_error = error_message
         article.embedding_status = PENDING_STATUS
+        cls._commit(session)
+
+    @classmethod
+    def process_embedding_if_ready(
+        cls,
+        session: Session,
+        article: Article,
+        embedding_service: ArticleEmbeddingProcessor,
+    ) -> Article:
+        """仅在正文与 AI 均完成后生成切片和向量。"""
+
+        if (
+            article.fetch_status != COMPLETED_STATUS
+            or article.ai_status != COMPLETED_STATUS
+            or not article.clean_content
+        ):
+            return article
+
+        article.status = PROCESSING_STATUS
+        article.embedding_status = PROCESSING_STATUS
+        article.embedding_error = None
+        cls._commit(session)
+
+        try:
+            chunks = embedding_service.generate(article.clean_content)
+            if not chunks:
+                raise EmbeddingError("正文未生成有效切片")
+        except EmbeddingError as exc:
+            cls._mark_embedding_failed(session, article, str(exc))
+        except Exception:
+            logger.error("Article %s Embedding 处理发生未预期异常", article.id)
+            cls._mark_embedding_failed(session, article, "Embedding 处理失败")
+        else:
+            try:
+                cls._apply_embedding_result(session, article, chunks)
+            except SQLAlchemyError:
+                logger.error("Article %s Embedding 数据保存失败", article.id)
+                cls._mark_embedding_failed(session, article, "Embedding 数据保存失败")
+
+        session.refresh(article)
+        return article
+
+    @classmethod
+    def _apply_embedding_result(
+        cls,
+        session: Session,
+        article: Article,
+        chunks: list[EmbeddedChunk],
+    ) -> None:
+        session.execute(
+            delete(ArticleChunk).where(ArticleChunk.article_id == article.id)
+        )
+        session.add_all(
+            [
+                ArticleChunk(
+                    article_id=article.id,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.content,
+                    token_count=chunk.token_count,
+                    embedding=chunk.embedding,
+                    chunk_metadata=chunk.metadata,
+                )
+                for chunk in chunks
+            ]
+        )
+        article.embedding_status = COMPLETED_STATUS
+        article.embedding_error = None
+        article.status = COMPLETED_STATUS
+        cls._commit(session)
+
+    @classmethod
+    def _mark_embedding_failed(
+        cls,
+        session: Session,
+        article: Article,
+        error_message: str,
+    ) -> None:
+        article.embedding_status = FAILED_STATUS
+        article.embedding_error = error_message
+        article.status = PARTIAL_FAILED_STATUS
         cls._commit(session)
 
     @staticmethod

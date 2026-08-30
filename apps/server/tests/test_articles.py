@@ -38,12 +38,12 @@ def test_create_success(client: TestClient) -> None:
     assert body["code"] == 20100
     assert body["data"]["user_id"] == 1
     assert body["data"]["favorite"] is True
-    assert body["data"]["status"] == "processing"
+    assert body["data"]["status"] == "completed"
     assert body["data"]["fetch_status"] == "completed"
     assert body["data"]["ai_status"] == "completed"
     assert body["data"]["one_sentence_summary"] == "测试文章的一句话总结。"
     assert set(body["data"]["tags"]) == {"测试", "AI"}
-    assert body["data"]["embedding_status"] == "pending"
+    assert body["data"]["embedding_status"] == "completed"
 
 
 def test_invalid_url_returns_unified_422(client: TestClient) -> None:
@@ -132,10 +132,10 @@ def test_status_and_status_404(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["data"] == {
         "id": article["id"],
-        "status": "processing",
+        "status": "completed",
         "fetch_status": "completed",
         "ai_status": "completed",
-        "embedding_status": "pending",
+        "embedding_status": "completed",
         "fetch_error": None,
         "ai_error": None,
         "embedding_error": None,
@@ -153,10 +153,13 @@ def test_delete_cascades_relations_and_delete_404(
     db_session.add(tag)
     db_session.flush()
     db_session.add(ArticleTag(article_id=article_id, tag_id=tag.id))
-    db_session.add(
-        ArticleChunk(article_id=article_id, chunk_index=0, content="级联删除验证")
-    )
     db_session.commit()
+
+    assert db_session.scalar(
+        select(func.count()).select_from(ArticleChunk).where(
+            ArticleChunk.article_id == article_id
+        )
+    ) == 1
 
     response = client.delete(f"/api/v1/articles/{article_id}")
     missing = client.delete(f"/api/v1/articles/{article_id}")

@@ -88,9 +88,9 @@ def test_http_fetch_extract_and_persist_hash(
     assert response.status_code == 201
     data = response.json()["data"]
     assert data["fetch_status"] == "completed"
-    assert data["status"] == "processing"
+    assert data["status"] == "completed"
     assert data["ai_status"] == "completed"
-    assert data["embedding_status"] == "pending"
+    assert data["embedding_status"] == "completed"
     assert data["fetch_error"] is None
     assert data["title"] == "网页标题"
     assert data["source_name"] == "示例站点"

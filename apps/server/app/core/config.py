@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = ""
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    embedding_base_url: str = ""
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_model: str = "text-embedding-v4"
+    embedding_dimension: int = Field(default=1024, ge=1, le=4096)
+    embedding_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    embedding_batch_size: int = Field(default=10, ge=1, le=100)
+    rag_chunk_size: int = Field(default=400, ge=1, le=8192)
+    rag_chunk_overlap: int = Field(default=80, ge=0, le=8191)
     fetch_user_agent: str = Field(
         default=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -29,6 +37,12 @@ class Settings(BaseSettings):
         ),
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def validate_chunk_settings(self) -> "Settings":
+        if self.rag_chunk_overlap >= self.rag_chunk_size:
+            raise ValueError("RAG_CHUNK_OVERLAP 必须小于 RAG_CHUNK_SIZE")
+        return self
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
