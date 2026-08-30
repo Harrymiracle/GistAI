@@ -3,6 +3,7 @@ from collections.abc import Generator
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.crawler.browser_fetcher import PlaywrightFetcher
 from app.crawler.extractor import ArticleExtractor
 from app.crawler.http_fetcher import HttpFetcher
 from app.crawler.service import CrawlerService
@@ -39,5 +40,10 @@ def get_crawler_service() -> CrawlerService:
         ),
         extractor=ArticleExtractor(
             min_content_chars=settings.fetch_min_content_chars,
+        ),
+        browser_fetcher=PlaywrightFetcher(
+            navigation_timeout_seconds=settings.playwright_navigation_timeout_seconds,
+            network_idle_timeout_seconds=settings.playwright_network_idle_timeout_seconds,
+            user_agent=settings.fetch_user_agent,
         ),
     )

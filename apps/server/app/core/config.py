@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     fetch_max_redirects: int = Field(default=5, ge=0, le=10)
     fetch_min_content_chars: int = Field(default=200, ge=1, le=10_000)
+    playwright_navigation_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    playwright_network_idle_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     fetch_user_agent: str = Field(
         default=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

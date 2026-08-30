@@ -20,3 +20,7 @@ class FetchHttpError(CrawlerError):
 
 class ExtractionError(CrawlerError):
     """网页没有提取出有效正文。"""
+
+
+class CrawlerFallbackError(CrawlerError):
+    """普通 HTTP 与 Playwright 两个阶段均失败。"""

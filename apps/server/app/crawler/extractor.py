@@ -31,14 +31,17 @@ class ArticleExtractor:
         self._min_content_chars = min_content_chars
 
     def extract(self, html_content: str, url: str) -> ExtractedArticle:
-        extracted = trafilatura.extract(
-            html_content,
-            url=url,
-            include_comments=False,
-            include_tables=True,
-            favor_precision=True,
-            output_format="txt",
-        )
+        try:
+            extracted = trafilatura.extract(
+                html_content,
+                url=url,
+                include_comments=False,
+                include_tables=True,
+                favor_precision=True,
+                output_format="txt",
+            )
+        except Exception as exc:
+            raise ExtractionError("网页正文提取失败") from exc
         if not extracted:
             raise ExtractionError("未能从网页中提取正文")
 

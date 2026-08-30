@@ -1,6 +1,6 @@
 # GistAI
 
-AI 阅读助手 MVP。当前仅完成 Phase 0 项目初始化。
+AI 阅读助手 MVP。
 
 ## 目录结构
 
@@ -32,8 +32,11 @@ npm run dev:web
 cd apps/server
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+.\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+Playwright 浏览器安装在本机用户缓存中，不会写入 Git 仓库。
 
 访问 `http://127.0.0.1:8000/health`。
 
