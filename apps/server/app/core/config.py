@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = ""
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    web_search_base_url: str = "https://api.tavily.com"
+    web_search_api_key: SecretStr = SecretStr("")
+    web_search_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    web_search_max_results: int = Field(default=5, ge=1, le=10)
     embedding_base_url: str = ""
     embedding_api_key: SecretStr = SecretStr("")
     embedding_model: str = "text-embedding-v4"

@@ -23,7 +23,8 @@ def test_reasoning_service_parses_decision_rewrite_and_answer() -> None:
         [
             (
                 '{"evidence_status":"partial","reason":"仅支持定义部分",'
-                '"next_action":"answer","selected_result_indexes":[0]}'
+                '"next_action":"answer","selected_result_indexes":[0],'
+                '"selected_web_result_indexes":[0]}'
             ),
             '{"query":"Agent Memory 的工作机制"}',
             '{"answer":"Agent Memory 会保存对话上下文。"}',
@@ -43,7 +44,16 @@ def test_reasoning_service_parses_decision_rewrite_and_answer() -> None:
     decision = service.decide(
         original_query="Agent Memory 是什么？",
         current_query="Agent Memory 是什么？",
-        evidence=evidence,
+        kb_evidence=evidence,
+        web_evidence=[
+            {
+                "title": "官方更新",
+                "url": "https://example.com/update",
+                "snippet": "这是搜索结果摘要。",
+                "source": "example.com",
+                "published_at": "2026-09-14",
+            }
+        ],
         allowed_actions=[AgentAction.ANSWER, AgentAction.REWRITE_QUERY],
         conversation=[],
     )
@@ -62,6 +72,10 @@ def test_reasoning_service_parses_decision_rewrite_and_answer() -> None:
     assert decision.evidence_status is EvidenceStatus.PARTIAL
     assert decision.next_action is AgentAction.ANSWER
     assert decision.selected_result_indexes == [0]
+    assert decision.selected_web_result_indexes == [0]
+    decision_payload = json.loads(client.calls[0][1])
+    assert decision_payload["knowledge_base_evidence"][0]["index"] == 0
+    assert decision_payload["web_search_evidence"][0]["index"] == 0
     assert rewritten == "Agent Memory 的工作机制"
     assert answer == "Agent Memory 会保存对话上下文。"
     assert len(client.calls) == 3
@@ -93,7 +107,8 @@ def test_reasoning_service_rejects_malformed_decision(raw_result: str) -> None:
         service.decide(
             original_query="问题",
             current_query="问题",
-            evidence=[],
+            kb_evidence=[],
+            web_evidence=[],
             allowed_actions=[AgentAction.INSUFFICIENT],
             conversation=[],
         )
@@ -124,6 +139,8 @@ def test_answer_prompt_requires_grounding_and_bounds_conversation() -> None:
     payload = json.loads(user_prompt)
     assert "只能使用 evidence 中的内容" in system_prompt
     assert "不得使用模型自身知识" in system_prompt
+    assert "搜索结果摘要" in system_prompt
+    assert "不得声称阅读网页全文" in system_prompt
     assert payload["evidence"] == evidence
     assert [item["content"] for item in payload["recent_conversation"]] == [
         "历史消息 2",

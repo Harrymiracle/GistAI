@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints
 
 
 KnowledgeQuery = Annotated[
@@ -13,6 +13,14 @@ DecisionReason = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
 ]
 ResultIndex = Annotated[int, Field(ge=0, strict=True)]
+WebResultText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=5000),
+]
+PublishedAt = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
 
 
 class KnowledgeSearchInput(BaseModel):
@@ -40,6 +48,27 @@ class KnowledgeSearchResult(BaseModel):
     score: float
 
 
+class WebSearchInput(BaseModel):
+    """受程序约束的外部搜索输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: KnowledgeQuery
+    max_results: int = Field(default=5, ge=1, le=10)
+
+
+class WebSearchResult(BaseModel):
+    """与具体搜索厂商无关的搜索级弱证据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: WebResultText
+    url: HttpUrl
+    snippet: WebResultText
+    source: WebResultText
+    published_at: PublishedAt | None = None
+
+
 class AgentAction(StrEnum):
     """后续 Agent 流程允许使用的动作类型。"""
 
@@ -51,6 +80,14 @@ class AgentAction(StrEnum):
     ANSWER = "answer"
     PARTIAL_ANSWER = "partial_answer"
     INSUFFICIENT = "insufficient"
+
+
+class AgentIntent(StrEnum):
+    """单轮问题对知识来源和时效性的意图。"""
+
+    KNOWLEDGE_BASE_ONLY = "knowledge_base_only"
+    FRESH_INFORMATION = "fresh_information"
+    OPEN = "open"
 
 
 class EvidenceStatus(StrEnum):
@@ -74,6 +111,10 @@ class AgentDecision(BaseModel):
         default_factory=list,
         max_length=10,
     )
+    selected_web_result_indexes: list[ResultIndex] = Field(
+        default_factory=list,
+        max_length=10,
+    )
 
 
 class QueryRewriteResult(BaseModel):
@@ -82,3 +123,23 @@ class QueryRewriteResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: KnowledgeQuery
+
+
+class IntentClassification(BaseModel):
+    """LLM 对模糊用户意图的结构化分类。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: AgentIntent
+    reason: DecisionReason
+
+
+class IntentDecision(BaseModel):
+    """经过程序策略归一化的单轮联网权限。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: AgentIntent
+    allow_web: bool
+    requires_freshness: bool
+    reason: DecisionReason

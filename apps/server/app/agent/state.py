@@ -2,7 +2,7 @@ from typing import Any
 
 from langgraph.graph import MessagesState
 
-from app.agent.schemas import AgentAction, EvidenceStatus
+from app.agent.schemas import AgentAction, AgentIntent, EvidenceStatus
 
 
 class AgentState(MessagesState, total=False):
@@ -11,7 +11,7 @@ class AgentState(MessagesState, total=False):
     original_query: str
     current_query: str
 
-    intent: str | None
+    intent: AgentIntent | None
     allow_web: bool
     requires_freshness: bool
 

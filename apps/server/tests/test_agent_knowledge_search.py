@@ -13,7 +13,9 @@ from app.agent.nodes import knowledge_search
 from app.agent.schemas import (
     AgentAction,
     AgentDecision,
+    AgentIntent,
     EvidenceStatus,
+    IntentDecision,
     KnowledgeSearchInput,
     KnowledgeSearchResult,
 )
@@ -42,7 +44,20 @@ class QueryEmbeddingStub:
         return [0.0] * 1024
 
 
+class NoWebSearchStub:
+    def search(self, _query: str) -> list[object]:
+        raise AssertionError("当前测试不应调用 Web Search")
+
+
 class InsufficientReasoningStub:
+    def classify_intent(self, **_options: object) -> IntentDecision:
+        return IntentDecision(
+            intent=AgentIntent.KNOWLEDGE_BASE_ONLY,
+            allow_web=False,
+            requires_freshness=False,
+            reason="测试仅使用知识库",
+        )
+
     def decide(self, **_options: object) -> AgentDecision:
         return AgentDecision(
             evidence_status=EvidenceStatus.INSUFFICIENT,
@@ -75,6 +90,7 @@ def runtime_for(
     return Runtime(
         context=AgentContext(
             knowledge_search=search,
+            web_search=NoWebSearchStub(),
             reasoning=InsufficientReasoningStub(),
             top_k=top_k,
         )
@@ -213,6 +229,7 @@ def test_graph_runs_knowledge_search_and_keeps_checkpoint() -> None:
     config = {"configurable": {"thread_id": str(uuid4())}}
     context = AgentContext(
         knowledge_search=search,
+        web_search=NoWebSearchStub(),
         reasoning=InsufficientReasoningStub(),
         top_k=3,
     )

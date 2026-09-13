@@ -9,7 +9,9 @@ from app.agent.graph import create_agent_graph
 from app.agent.schemas import (
     AgentAction,
     AgentDecision,
+    AgentIntent,
     EvidenceStatus,
+    IntentDecision,
     KnowledgeSearchInput,
     KnowledgeSearchResult,
 )
@@ -32,6 +34,11 @@ class QueryKnowledgeSearchStub:
         return response
 
 
+class NoWebSearchStub:
+    def search(self, _query: str) -> list[object]:
+        raise AssertionError("当前测试不应调用 Web Search")
+
+
 class ScriptedReasoningStub:
     def __init__(
         self,
@@ -47,12 +54,24 @@ class ScriptedReasoningStub:
         self.rewrite_inputs: list[dict[str, Any]] = []
         self.answer_inputs: list[dict[str, Any]] = []
 
+    def classify_intent(
+        self,
+        **_options: object,
+    ) -> IntentDecision:
+        return IntentDecision(
+            intent=AgentIntent.KNOWLEDGE_BASE_ONLY,
+            allow_web=False,
+            requires_freshness=False,
+            reason="Phase 15 回归测试仅使用知识库",
+        )
+
     def decide(
         self,
         *,
         original_query: str,
         current_query: str,
-        evidence: list[dict[str, Any]],
+        kb_evidence: list[dict[str, Any]],
+        web_evidence: list[dict[str, Any]],
         allowed_actions: list[AgentAction],
         conversation: Sequence[BaseMessage],
     ) -> AgentDecision:
@@ -60,7 +79,8 @@ class ScriptedReasoningStub:
             {
                 "original_query": original_query,
                 "current_query": current_query,
-                "evidence": evidence,
+                "kb_evidence": kb_evidence,
+                "web_evidence": web_evidence,
                 "allowed_actions": allowed_actions,
                 "conversation": conversation,
             }
@@ -153,7 +173,11 @@ def invoke_graph(
     return active_graph.invoke(
         {"messages": [{"role": "user", "content": question}]},
         config=active_config,
-        context=AgentContext(knowledge_search=search, reasoning=reasoning),
+        context=AgentContext(
+            knowledge_search=search,
+            web_search=NoWebSearchStub(),
+            reasoning=reasoning,
+        ),
     )
 
 
@@ -325,7 +349,10 @@ def test_partial_answer_uses_only_selected_evidence_and_states_gap() -> None:
 
     assert "其余内容无法根据当前知识库确认" in result["final_answer"]
     assert reasoning.answer_inputs[0]["evidence"] == [
-        selected.model_dump(mode="json")
+        {
+            "source_type": "knowledge_base",
+            **selected.model_dump(mode="json"),
+        }
     ]
     assert result["sources"] == [
         {"article_id": 11, "chunk_id": 101, "title": "Agent Memory"}

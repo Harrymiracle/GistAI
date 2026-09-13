@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.client import OpenAICompatibleClient
 from app.ai.service import AIService
+from app.agent.web_search import TavilyWebSearchProvider, WebSearchService
 from app.core.config import settings
 from app.crawler.browser_fetcher import PlaywrightFetcher
 from app.crawler.extractor import ArticleExtractor
@@ -72,6 +73,19 @@ def get_ai_service() -> AIService:
             model=settings.llm_model,
             timeout_seconds=settings.llm_timeout_seconds,
         )
+    )
+
+
+def get_web_search_service() -> WebSearchService:
+    """根据本机配置构建可替换 Provider 的只读 Web Search Service。"""
+
+    return WebSearchService(
+        TavilyWebSearchProvider(
+            base_url=settings.web_search_base_url,
+            api_key=settings.web_search_api_key,
+            timeout_seconds=settings.web_search_timeout_seconds,
+        ),
+        max_results=settings.web_search_max_results,
     )
 
 

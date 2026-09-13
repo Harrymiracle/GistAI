@@ -8,7 +8,9 @@ from app.agent.nodes import initialize
 from app.agent.schemas import (
     AgentAction,
     AgentDecision,
+    AgentIntent,
     EvidenceStatus,
+    IntentDecision,
     KnowledgeSearchInput,
     KnowledgeSearchResult,
 )
@@ -22,7 +24,20 @@ class EmptyKnowledgeSearchStub:
         return []
 
 
+class NoWebSearchStub:
+    def search(self, _query: str) -> list[object]:
+        raise AssertionError("当前测试不应调用 Web Search")
+
+
 class InsufficientReasoningStub:
+    def classify_intent(self, **_options: object) -> IntentDecision:
+        return IntentDecision(
+            intent=AgentIntent.KNOWLEDGE_BASE_ONLY,
+            allow_web=False,
+            requires_freshness=False,
+            reason="测试仅使用知识库",
+        )
+
     def decide(self, **_options: object) -> AgentDecision:
         return AgentDecision(
             evidence_status=EvidenceStatus.INSUFFICIENT,
@@ -40,6 +55,7 @@ class InsufficientReasoningStub:
 def empty_search_context() -> AgentContext:
     return AgentContext(
         knowledge_search=EmptyKnowledgeSearchStub(),
+        web_search=NoWebSearchStub(),
         reasoning=InsufficientReasoningStub(),
     )
 

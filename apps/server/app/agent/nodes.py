@@ -5,11 +5,17 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.runtime import Runtime
 
 from app.agent.context import AgentContext
-from app.agent.schemas import AgentAction, EvidenceStatus, KnowledgeSearchInput
+from app.agent.schemas import (
+    AgentAction,
+    AgentIntent,
+    EvidenceStatus,
+    KnowledgeSearchInput,
+)
 from app.agent.state import AgentState
 
 
 MAX_REWRITES = 1
+MAX_WEB_SEARCHES = 1
 INSUFFICIENT_ANSWER = "当前知识库中没有足够可靠的证据，无法回答这个问题。"
 FAILED_ANSWER = "当前无法从知识库获得可靠证据，请稍后重试。"
 PARTIAL_GAP_NOTICE = "其余内容无法根据当前知识库确认。"
@@ -51,6 +57,32 @@ def initialize(state: AgentState) -> dict[str, object]:
         "last_tool_error": None,
         "final_answer": None,
         "sources": [],
+    }
+
+
+def initial_decision(
+    state: AgentState,
+    runtime: Runtime[AgentContext],
+) -> dict[str, object]:
+    """在首次证据评估前确定联网许可和时效性要求。"""
+
+    try:
+        result = runtime.context.reasoning.classify_intent(
+            query=state["original_query"],
+            conversation=state["messages"],
+        )
+    except Exception:
+        return {
+            "intent": AgentIntent.KNOWLEDGE_BASE_ONLY,
+            "allow_web": False,
+            "requires_freshness": False,
+            "evidence_reason": "无法确认联网意图，已安全限制为仅知识库。",
+        }
+    return {
+        "intent": result.intent,
+        "allow_web": result.allow_web,
+        "requires_freshness": result.requires_freshness,
+        "evidence_reason": result.reason,
     }
 
 
@@ -100,19 +132,20 @@ def evaluate_and_decide(
     if state.get("last_tool_error"):
         return _insufficient_decision(
             allowed_actions,
-            "知识库检索执行失败，无法评估证据。",
+            "证据工具执行失败，无法继续评估。",
         )
     if allowed_actions == [AgentAction.INSUFFICIENT]:
         return _insufficient_decision(
             allowed_actions,
-            "查询改写次数已用尽，仍未找到可用证据。",
+            "所有受控动作均已用尽，仍未找到可用证据。",
         )
 
     try:
         decision = runtime.context.reasoning.decide(
             original_query=state["original_query"],
             current_query=state["current_query"],
-            evidence=list(state.get("kb_results", [])),
+            kb_evidence=list(state.get("kb_results", [])),
+            web_evidence=list(state.get("web_results", [])),
             allowed_actions=allowed_actions,
             conversation=state["messages"],
         )
@@ -127,7 +160,17 @@ def evaluate_and_decide(
             selected_evidence = _select_evidence(
                 list(state.get("kb_results", [])),
                 decision.selected_result_indexes,
+                source_type="knowledge_base",
+            ) + _select_evidence(
+                list(state.get("web_results", [])),
+                decision.selected_web_result_indexes,
+                source_type="web",
             )
+            if (
+                state.get("requires_freshness")
+                and not decision.selected_web_result_indexes
+            ):
+                raise ValueError("时效性问题的回答必须选择 Web Evidence")
             if not selected_evidence:
                 raise ValueError("回答动作缺少有效证据")
         elif decision.next_action is AgentAction.REWRITE_QUERY:
@@ -136,6 +179,18 @@ def evaluate_and_decide(
                 EvidenceStatus.INSUFFICIENT,
             }:
                 raise ValueError("改写动作与证据状态不一致")
+            selected_evidence = []
+        elif decision.next_action is AgentAction.WEB_SEARCH:
+            if decision.evidence_status not in {
+                EvidenceStatus.PARTIAL,
+                EvidenceStatus.INSUFFICIENT,
+            }:
+                raise ValueError("外部搜索动作与证据状态不一致")
+            if (
+                decision.selected_result_indexes
+                or decision.selected_web_result_indexes
+            ):
+                raise ValueError("外部搜索动作不得预先选择证据")
             selected_evidence = []
         else:
             if decision.evidence_status is not EvidenceStatus.INSUFFICIENT:
@@ -212,6 +267,48 @@ def rewrite_query(
     return update
 
 
+def web_search(
+    state: AgentState,
+    runtime: Runtime[AgentContext],
+) -> dict[str, object]:
+    """在单轮一次的硬预算内获取搜索结果摘要。"""
+
+    web_search_count = state.get("tool_call_counts", {}).get("web_search", 0)
+    if not state.get("allow_web") or web_search_count >= MAX_WEB_SEARCHES:
+        return {
+            **_insufficient_decision(
+                [AgentAction.INSUFFICIENT],
+                "Web Search 未获授权或已达到调用上限。",
+            ),
+            "last_tool_error": "Web Search 被程序限制拒绝",
+        }
+
+    tool_call_counts = dict(state.get("tool_call_counts", {}))
+    tool_call_counts["web_search"] = web_search_count + 1
+    update: dict[str, object] = {
+        "step_count": state.get("step_count", 0) + 1,
+        "tool_call_counts": tool_call_counts,
+    }
+    try:
+        results = runtime.context.web_search.search(state["current_query"])
+    except Exception as exc:
+        update.update(
+            web_results=[],
+            last_tool_error=f"Web Search 执行失败（{type(exc).__name__}）",
+        )
+        return update
+
+    update.update(
+        web_results=[result.model_dump(mode="json") for result in results],
+        selected_evidence=[],
+        evidence_status=EvidenceStatus.UNKNOWN,
+        evidence_reason=None,
+        next_action=None,
+        last_tool_error=None,
+    )
+    return update
+
+
 def generate_answer(
     state: AgentState,
     runtime: Runtime[AgentContext],
@@ -237,14 +334,7 @@ def generate_answer(
 
     if state["evidence_status"] is EvidenceStatus.PARTIAL:
         answer = f"{answer}\n\n{PARTIAL_GAP_NOTICE}"
-    sources = [
-        {
-            "article_id": item["article_id"],
-            "chunk_id": item["chunk_id"],
-            "title": item.get("title"),
-        }
-        for item in selected_evidence
-    ]
+    sources = [_source_from_evidence(item) for item in selected_evidence]
     return _answer_update(answer, sources, None)
 
 
@@ -257,13 +347,20 @@ def generate_insufficient_answer(state: AgentState) -> dict[str, object]:
 
 def route_after_decision(
     state: AgentState,
-) -> Literal["generate_answer", "rewrite_query", "insufficient_answer"]:
+) -> Literal[
+    "generate_answer",
+    "rewrite_query",
+    "web_search",
+    "insufficient_answer",
+]:
     """只依据已校验的 next_action 选择下一节点。"""
 
     if state.get("next_action") is AgentAction.ANSWER:
         return "generate_answer"
     if state.get("next_action") is AgentAction.REWRITE_QUERY:
         return "rewrite_query"
+    if state.get("next_action") is AgentAction.WEB_SEARCH:
+        return "web_search"
     return "insufficient_answer"
 
 
@@ -280,15 +377,24 @@ def route_after_rewrite(
 def _allowed_actions(state: AgentState) -> list[AgentAction]:
     if state.get("last_tool_error"):
         return [AgentAction.INSUFFICIENT]
-    has_evidence = bool(state.get("kb_results"))
+    has_evidence = bool(state.get("kb_results") or state.get("web_results"))
     can_rewrite = state.get("rewrite_count", 0) < MAX_REWRITES
-    if not has_evidence:
-        if can_rewrite:
-            return [AgentAction.REWRITE_QUERY, AgentAction.INSUFFICIENT]
-        return [AgentAction.INSUFFICIENT]
-    actions = [AgentAction.ANSWER]
+    web_search_count = state.get("tool_call_counts", {}).get("web_search", 0)
+    can_search_web = (
+        state.get("allow_web", False)
+        and web_search_count < MAX_WEB_SEARCHES
+    )
+    freshness_verified = (
+        not state.get("requires_freshness", False)
+        or bool(state.get("web_results"))
+    )
+    actions: list[AgentAction] = []
+    if has_evidence and freshness_verified:
+        actions.append(AgentAction.ANSWER)
     if can_rewrite:
         actions.append(AgentAction.REWRITE_QUERY)
+    if can_search_web:
+        actions.append(AgentAction.WEB_SEARCH)
     actions.append(AgentAction.INSUFFICIENT)
     return actions
 
@@ -296,10 +402,33 @@ def _allowed_actions(state: AgentState) -> list[AgentAction]:
 def _select_evidence(
     candidates: list[dict[str, object]],
     indexes: list[int],
+    *,
+    source_type: str,
 ) -> list[dict[str, object]]:
-    if not indexes or any(index >= len(candidates) for index in indexes):
+    if any(index >= len(candidates) for index in indexes):
+        raise ValueError("证据索引超出候选范围")
+    if not indexes:
         return []
-    return [candidates[index] for index in dict.fromkeys(indexes)]
+    return [
+        {"source_type": source_type, **candidates[index]}
+        for index in dict.fromkeys(indexes)
+    ]
+
+
+def _source_from_evidence(item: dict[str, object]) -> dict[str, object]:
+    if item["source_type"] == "web":
+        return {
+            "source_type": "web",
+            "title": item.get("title"),
+            "url": item["url"],
+            "source": item["source"],
+            "published_at": item.get("published_at"),
+        }
+    return {
+        "article_id": item["article_id"],
+        "chunk_id": item["chunk_id"],
+        "title": item.get("title"),
+    }
 
 
 def _insufficient_decision(
