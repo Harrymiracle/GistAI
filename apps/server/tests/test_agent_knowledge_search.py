@@ -10,7 +10,13 @@ from app.agent.context import AgentContext
 from app.agent.graph import create_agent_graph
 from app.agent.knowledge_search import KnowledgeSearchService
 from app.agent.nodes import knowledge_search
-from app.agent.schemas import KnowledgeSearchInput, KnowledgeSearchResult
+from app.agent.schemas import (
+    AgentAction,
+    AgentDecision,
+    EvidenceStatus,
+    KnowledgeSearchInput,
+    KnowledgeSearchResult,
+)
 from app.services.search import SearchService, SemanticSearchHit
 
 
@@ -36,6 +42,21 @@ class QueryEmbeddingStub:
         return [0.0] * 1024
 
 
+class InsufficientReasoningStub:
+    def decide(self, **_options: object) -> AgentDecision:
+        return AgentDecision(
+            evidence_status=EvidenceStatus.INSUFFICIENT,
+            reason="测试选择安全终止",
+            next_action=AgentAction.INSUFFICIENT,
+        )
+
+    def rewrite_query(self, **_options: object) -> str:
+        raise AssertionError("不应改写查询")
+
+    def generate_answer(self, **_options: object) -> str:
+        raise AssertionError("不应生成回答")
+
+
 def knowledge_result() -> KnowledgeSearchResult:
     return KnowledgeSearchResult(
         article_id=11,
@@ -51,7 +72,13 @@ def runtime_for(
     *,
     top_k: int = 5,
 ) -> Runtime[AgentContext]:
-    return Runtime(context=AgentContext(knowledge_search=search, top_k=top_k))
+    return Runtime(
+        context=AgentContext(
+            knowledge_search=search,
+            reasoning=InsufficientReasoningStub(),
+            top_k=top_k,
+        )
+    )
 
 
 def test_knowledge_search_input_validates_query_and_top_k() -> None:
@@ -184,7 +211,11 @@ def test_graph_runs_knowledge_search_and_keeps_checkpoint() -> None:
     search = KnowledgeSearchStub([knowledge_result()])
     graph = create_agent_graph()
     config = {"configurable": {"thread_id": str(uuid4())}}
-    context = AgentContext(knowledge_search=search, top_k=3)
+    context = AgentContext(
+        knowledge_search=search,
+        reasoning=InsufficientReasoningStub(),
+        top_k=3,
+    )
 
     result = graph.invoke(
         {"messages": [{"role": "user", "content": "Agent Memory"}]},
@@ -196,5 +227,5 @@ def test_graph_runs_knowledge_search_and_keeps_checkpoint() -> None:
     assert search.inputs == [KnowledgeSearchInput(query="Agent Memory", top_k=3)]
     assert result["kb_results"][0]["chunk_id"] == 101
     assert result["step_count"] == 1
-    assert result["final_answer"] == "Agent graph initialized successfully."
+    assert "无法" in result["final_answer"]
     assert checkpoint.values["kb_results"] == result["kb_results"]

@@ -8,6 +8,11 @@ KnowledgeQuery = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
 ]
+DecisionReason = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
+]
+ResultIndex = Annotated[int, Field(ge=0, strict=True)]
 
 
 class KnowledgeSearchInput(BaseModel):
@@ -53,4 +58,27 @@ class EvidenceStatus(StrEnum):
 
     UNKNOWN = "unknown"
     SUFFICIENT = "sufficient"
+    PARTIAL = "partial"
     INSUFFICIENT = "insufficient"
+
+
+class AgentDecision(BaseModel):
+    """LLM 返回且由程序再次约束的证据决策。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_status: EvidenceStatus
+    reason: DecisionReason
+    next_action: AgentAction
+    selected_result_indexes: list[ResultIndex] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+
+
+class QueryRewriteResult(BaseModel):
+    """LLM 返回的单一改写查询。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: KnowledgeQuery

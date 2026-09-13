@@ -6,6 +6,8 @@ from app.agent.context import AgentContext
 from app.agent.graph import create_agent_graph
 from app.agent.nodes import initialize
 from app.agent.schemas import (
+    AgentAction,
+    AgentDecision,
     EvidenceStatus,
     KnowledgeSearchInput,
     KnowledgeSearchResult,
@@ -20,11 +22,29 @@ class EmptyKnowledgeSearchStub:
         return []
 
 
+class InsufficientReasoningStub:
+    def decide(self, **_options: object) -> AgentDecision:
+        return AgentDecision(
+            evidence_status=EvidenceStatus.INSUFFICIENT,
+            reason="没有候选证据",
+            next_action=AgentAction.INSUFFICIENT,
+        )
+
+    def rewrite_query(self, **_options: object) -> str:
+        raise AssertionError("不应改写查询")
+
+    def generate_answer(self, **_options: object) -> str:
+        raise AssertionError("不应生成事实回答")
+
+
 def empty_search_context() -> AgentContext:
-    return AgentContext(knowledge_search=EmptyKnowledgeSearchStub())
+    return AgentContext(
+        knowledge_search=EmptyKnowledgeSearchStub(),
+        reasoning=InsufficientReasoningStub(),
+    )
 
 
-def test_agent_graph_runs_to_end_with_placeholder_answer() -> None:
+def test_agent_graph_runs_to_end_with_insufficient_answer() -> None:
     graph = create_agent_graph()
     config = {"configurable": {"thread_id": str(uuid4())}}
 
@@ -34,7 +54,8 @@ def test_agent_graph_runs_to_end_with_placeholder_answer() -> None:
         context=empty_search_context(),
     )
 
-    assert result["final_answer"] == "Agent graph initialized successfully."
+    assert "无法" in result["final_answer"]
+    assert result["evidence_status"] is EvidenceStatus.INSUFFICIENT
 
 
 def test_initialize_sets_queries_and_control_defaults() -> None:
@@ -60,10 +81,11 @@ def test_initialize_sets_queries_and_control_defaults() -> None:
     assert result["allowed_actions"] == []
     assert result["next_action"] is None
     assert result["last_tool_error"] is None
+    assert result["final_answer"] is None
     assert result["sources"] == []
 
 
-def test_same_thread_uses_checkpoint_and_preserves_original_query() -> None:
+def test_same_thread_uses_checkpoint_and_resets_run_state() -> None:
     graph = create_agent_graph()
     config = {"configurable": {"thread_id": str(uuid4())}}
 
@@ -79,12 +101,12 @@ def test_same_thread_uses_checkpoint_and_preserves_original_query() -> None:
     )
     checkpoint = graph.get_state(config)
 
-    assert result["original_query"] == "First question"
+    assert result["original_query"] == "Follow-up question"
     assert result["current_query"] == "Follow-up question"
-    assert len(result["messages"]) == 2
-    assert result["step_count"] == 2
-    assert result["tool_call_counts"]["knowledge_search"] == 2
+    assert len(result["messages"]) == 4
+    assert result["step_count"] == 1
+    assert result["tool_call_counts"]["knowledge_search"] == 1
     assert checkpoint.values["final_answer"] == result["final_answer"]
     assert checkpoint.values["current_query"] == "Follow-up question"
-    assert checkpoint.values["step_count"] == 2
-    assert checkpoint.values["tool_call_counts"]["knowledge_search"] == 2
+    assert checkpoint.values["step_count"] == 1
+    assert checkpoint.values["tool_call_counts"]["knowledge_search"] == 1
