@@ -1,4 +1,38 @@
 from enum import StrEnum
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+
+KnowledgeQuery = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
+]
+
+
+class KnowledgeSearchInput(BaseModel):
+    """受程序约束的知识库检索输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: KnowledgeQuery
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class KnowledgeSearchResult(BaseModel):
+    """写入 AgentState 的最小知识库候选证据。"""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        populate_by_name=True,
+    )
+
+    article_id: int
+    chunk_id: int
+    title: str | None
+    chunk_text: str = Field(validation_alias="excerpt")
+    score: float
 
 
 class AgentAction(StrEnum):

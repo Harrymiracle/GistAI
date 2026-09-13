@@ -1,8 +1,10 @@
 from collections.abc import Sequence
 
 from langchain_core.messages import BaseMessage
+from langgraph.runtime import Runtime
 
-from app.agent.schemas import EvidenceStatus
+from app.agent.context import AgentContext
+from app.agent.schemas import EvidenceStatus, KnowledgeSearchInput
 from app.agent.state import AgentState
 
 
@@ -45,6 +47,42 @@ def initialize(state: AgentState) -> dict[str, object]:
         "last_tool_error": state.get("last_tool_error"),
         "sources": list(state.get("sources", [])),
     }
+
+
+def knowledge_search(
+    state: AgentState,
+    runtime: Runtime[AgentContext],
+) -> dict[str, object]:
+    """调用现有知识库检索能力并写入最小候选证据。"""
+
+    payload = KnowledgeSearchInput(
+        query=state["current_query"],
+        top_k=runtime.context.top_k,
+    )
+    tool_call_counts = dict(state.get("tool_call_counts", {}))
+    tool_call_counts["knowledge_search"] = (
+        tool_call_counts.get("knowledge_search", 0) + 1
+    )
+    update: dict[str, object] = {
+        "step_count": state.get("step_count", 0) + 1,
+        "tool_call_counts": tool_call_counts,
+    }
+    try:
+        results = runtime.context.knowledge_search.search(payload)
+    except Exception as exc:
+        update.update(
+            kb_results=[],
+            last_tool_error=(
+                f"Knowledge Search 执行失败（{type(exc).__name__}）"
+            ),
+        )
+        return update
+
+    update.update(
+        kb_results=[result.model_dump(mode="json") for result in results],
+        last_tool_error=None,
+    )
+    return update
 
 
 def finish(_state: AgentState) -> dict[str, str]:
