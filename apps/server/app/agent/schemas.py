@@ -141,6 +141,34 @@ class EvidenceStatus(StrEnum):
     INSUFFICIENT = "insufficient"
 
 
+class AgentErrorType(StrEnum):
+    """Agent 运行期可安全暴露的错误分类。"""
+
+    POLICY = "policy_error"
+    EXECUTION = "execution_error"
+    REASONING = "reasoning_error"
+
+
+class ToolExecutionStatus(StrEnum):
+    """一次受控 Tool 请求的标准化结果。"""
+
+    SUCCESS = "success"
+    EMPTY = "empty"
+    VALIDATION_ERROR = "validation_error"
+    EXECUTION_ERROR = "execution_error"
+
+
+class ToolExecutionResult(BaseModel):
+    """不包含原始异常和敏感载荷的最小 Tool 执行摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str
+    status: ToolExecutionStatus
+    error_type: AgentErrorType | None = None
+    safe_message: str | None = None
+
+
 class AgentDecision(BaseModel):
     """LLM 返回且由程序再次约束的证据决策。"""
 

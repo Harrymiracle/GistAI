@@ -9,6 +9,7 @@ from app.agent.graph import create_agent_graph
 from app.agent.schemas import (
     AgentAction,
     AgentDecision,
+    AgentErrorType,
     AgentIntent,
     EvidenceStatus,
     IntentDecision,
@@ -263,6 +264,7 @@ def test_knowledge_search_timeout_terminates_without_decision_loop() -> None:
     assert result["evidence_status"] is EvidenceStatus.INSUFFICIENT
     assert result["rewrite_count"] == 0
     assert result["last_tool_error"] == "Knowledge Search 执行失败（TimeoutError）"
+    assert result["last_error_type"] is AgentErrorType.EXECUTION
     assert "敏感详情" not in result["final_answer"]
     assert reasoning.decision_inputs == []
 
@@ -284,6 +286,7 @@ def test_rewrite_is_rejected_after_budget_is_exhausted() -> None:
     assert result["rewrite_count"] == 1
     assert result["next_action"] is AgentAction.INSUFFICIENT
     assert AgentAction.REWRITE_QUERY not in result["allowed_actions"]
+    assert result["last_error_type"] is AgentErrorType.REASONING
     assert len(search.inputs) == 2
     assert "无法" in result["final_answer"]
 
@@ -298,6 +301,7 @@ def test_malformed_decision_output_fails_safely() -> None:
 
     assert result["next_action"] is AgentAction.INSUFFICIENT
     assert result["last_tool_error"] == "Agent 决策失败（LLMResponseError）"
+    assert result["last_error_type"] is AgentErrorType.REASONING
     assert "无法" in result["final_answer"]
 
 
@@ -316,6 +320,7 @@ def test_rewrite_failure_terminates_without_retry_or_detail_leak() -> None:
     assert result["step_count"] == 2
     assert result["tool_call_counts"] == {"knowledge_search": 1}
     assert result["last_tool_error"] == "Query Rewrite 执行失败（RuntimeError）"
+    assert result["last_error_type"] is AgentErrorType.REASONING
     assert "敏感改写详情" not in result["final_answer"]
     assert len(search.inputs) == 1
 
@@ -330,6 +335,7 @@ def test_answer_failure_returns_no_sources_or_detail_leak() -> None:
     result = invoke_graph("问题", search, reasoning)
 
     assert result["last_tool_error"] == "Agent 回答生成失败（RuntimeError）"
+    assert result["last_error_type"] is AgentErrorType.REASONING
     assert result["sources"] == []
     assert "敏感回答详情" not in result["final_answer"]
     assert len(search.inputs) == 1

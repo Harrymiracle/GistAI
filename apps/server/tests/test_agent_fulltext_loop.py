@@ -95,9 +95,16 @@ class WebPageFetchStub:
 
 
 class ScriptedReasoning:
-    def __init__(self, decisions: list[AgentDecision], *, fresh: bool = False) -> None:
+    def __init__(
+        self,
+        decisions: list[AgentDecision],
+        *,
+        fresh: bool = False,
+        rewrites: list[str] | None = None,
+    ) -> None:
         self.decisions = decisions
         self.fresh = fresh
+        self.rewrites = list(rewrites or [])
         self.decision_inputs: list[dict[str, object]] = []
         self.answer_evidence: list[dict[str, object]] = []
 
@@ -117,7 +124,9 @@ class ScriptedReasoning:
         return self.decisions.pop(0)
 
     def rewrite_query(self, **_options: object) -> str:
-        raise AssertionError("当前测试不应改写")
+        if not self.rewrites:
+            raise AssertionError("当前测试不应改写")
+        return self.rewrites.pop(0)
 
     def generate_answer(self, **options: object) -> str:
         self.answer_evidence = list(options["evidence"])  # type: ignore[arg-type]
@@ -565,3 +574,53 @@ def test_new_run_resets_fulltext_state_and_read_budgets() -> None:
     assert second["web_page_contents"] == []
     assert second["tool_call_counts"] == {"knowledge_search": 1}
     assert len(second["messages"]) == 4
+
+
+def test_worst_case_legal_path_uses_eight_steps_and_always_terminates() -> None:
+    web_results = [
+        WebSearchResult(
+            title=f"搜索结果 {index}",
+            url=f"https://public.example/page-{index}",
+            snippet="摘要不完整",
+            source="示例站点",
+        )
+        for index in range(2)
+    ]
+    reasoning = ScriptedReasoning(
+        [
+            _decision(AgentAction.REWRITE_QUERY),
+            _decision(AgentAction.WEB_SEARCH),
+            _decision(AgentAction.GET_ARTICLE_CONTENT, selected_article_result_index=0),
+            _decision(AgentAction.GET_ARTICLE_CONTENT, selected_article_result_index=1),
+            _decision(AgentAction.FETCH_WEB_PAGE, selected_web_page_result_index=0),
+            _decision(AgentAction.FETCH_WEB_PAGE, selected_web_page_result_index=1),
+            _decision(AgentAction.INSUFFICIENT),
+        ],
+        rewrites=["更精确的目标答案"],
+    )
+
+    result, articles, web_search, fetcher = _invoke(
+        knowledge_ids=[1, 2],
+        reasoning=reasoning,
+        web_search=WebSearchStub(web_results),
+    )
+
+    assert result["step_count"] == 8
+    assert result["tool_call_counts"] == {
+        "knowledge_search": 2,
+        "web_search": 1,
+        "get_article_content": 2,
+        "fetch_web_page": 2,
+    }
+    assert articles.calls == [1, 2]
+    assert web_search.calls == 1
+    assert fetcher.calls == [
+        "https://public.example/page-0",
+        "https://public.example/page-1",
+    ]
+    assert reasoning.decision_inputs[-1]["allowed_actions"] == [
+        AgentAction.ANSWER,
+        AgentAction.INSUFFICIENT,
+    ]
+    assert len(result["action_history"]) == 8
+    assert result["next_action"] is AgentAction.INSUFFICIENT

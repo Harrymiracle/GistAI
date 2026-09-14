@@ -2,7 +2,12 @@ from typing import Any
 
 from langgraph.graph import MessagesState
 
-from app.agent.schemas import AgentAction, AgentIntent, EvidenceStatus
+from app.agent.schemas import (
+    AgentAction,
+    AgentErrorType,
+    AgentIntent,
+    EvidenceStatus,
+)
 
 
 class AgentState(MessagesState, total=False):
@@ -37,6 +42,9 @@ class AgentState(MessagesState, total=False):
     selected_web_page_result_index: int | None
 
     last_tool_error: str | None
+    last_error_type: AgentErrorType | None
+    last_tool_result: dict[str, Any] | None
+    action_history: list[dict[str, Any]]
 
     final_answer: str | None
     sources: list[dict[str, Any]]

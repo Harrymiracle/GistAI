@@ -21,7 +21,7 @@ from app.agent.state import AgentState
 
 
 def create_agent_graph() -> CompiledStateGraph:
-    """创建最多改写一次、最多外部搜索一次的 Agent 决策图。"""
+    """创建由集中式 Runtime Policy 约束且全局有界的 Agent 决策图。"""
 
     builder = StateGraph(AgentState, context_schema=AgentContext)
     builder.add_node("initialize", initialize)

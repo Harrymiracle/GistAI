@@ -9,6 +9,7 @@ from app.agent.graph import create_agent_graph
 from app.agent.schemas import (
     AgentAction,
     AgentDecision,
+    AgentErrorType,
     AgentIntent,
     EvidenceStatus,
     IntentDecision,
@@ -266,6 +267,7 @@ def test_empty_web_result_is_distinct_success_and_terminates() -> None:
 
     assert result["web_results"] == []
     assert result["last_tool_error"] is None
+    assert result["last_error_type"] is None
     assert result["tool_call_counts"]["web_search"] == 1
 
 
@@ -309,8 +311,32 @@ def test_web_timeout_fails_safely_without_retry_or_detail_leak() -> None:
 
     assert result["tool_call_counts"]["web_search"] == 1
     assert result["last_tool_error"] == "Web Search 执行失败（TimeoutError）"
+    assert result["last_error_type"] is AgentErrorType.EXECUTION
     assert "敏感网络详情" not in result["final_answer"]
     assert len(reasoning.decision_inputs) == 1
+
+
+def test_web_error_can_fall_back_to_kb_partial_without_losing_error_type() -> None:
+    reasoning = ReasoningStub(
+        intent=intent(AgentIntent.OPEN, allow_web=True),
+        decisions=[
+            decision(EvidenceStatus.PARTIAL, AgentAction.WEB_SEARCH),
+            decision(EvidenceStatus.PARTIAL, AgentAction.ANSWER, kb=[0]),
+        ],
+        answers=["知识库只支持部分结论。"],
+    )
+
+    result = run(
+        "复合问题",
+        knowledge=KnowledgeSearchStub({"复合问题": [kb_result()]}),
+        web=WebSearchStub([TimeoutError("provider-key=secret")]),
+        reasoning=reasoning,
+    )
+
+    assert result["final_answer"].startswith("知识库只支持部分结论。")
+    assert result["last_error_type"] is AgentErrorType.EXECUTION
+    assert result["last_tool_result"]["error_type"] is AgentErrorType.EXECUTION
+    assert "secret" not in result["final_answer"]
 
 
 def test_second_web_search_is_rejected_by_program_budget() -> None:
