@@ -200,7 +200,7 @@ def test_response_statuses_are_explicit() -> None:
     assert statuses == ["partial", "insufficient", "error"]
 
 
-def test_unexpected_failure_uses_safe_api_error() -> None:
+def test_unexpected_failure_uses_safe_api_error(caplog) -> None:
     client = build_client(UnexpectedGraphStub())
 
     response = client.post("/api/v1/agent/chat", json={"message": "问题"})
@@ -213,6 +213,8 @@ def test_unexpected_failure_uses_safe_api_error() -> None:
     }
     assert "provider" not in response.text
     assert "密钥" not in response.text
+    assert "provider" not in caplog.text
+    assert "密钥" not in caplog.text
 
 
 def test_agent_chat_request_validation_is_strict() -> None:

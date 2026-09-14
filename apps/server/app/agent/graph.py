@@ -1,3 +1,4 @@
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -20,7 +21,9 @@ from app.agent.nodes import (
 from app.agent.state import AgentState
 
 
-def create_agent_graph() -> CompiledStateGraph:
+def create_agent_graph(
+    checkpointer: BaseCheckpointSaver | None = None,
+) -> CompiledStateGraph:
     """创建由集中式 Runtime Policy 约束且全局有界的 Agent 决策图。"""
 
     builder = StateGraph(AgentState, context_schema=AgentContext)
@@ -63,7 +66,7 @@ def create_agent_graph() -> CompiledStateGraph:
     )
     builder.add_edge("generate_answer", END)
     builder.add_edge("insufficient_answer", END)
-    return builder.compile(checkpointer=InMemorySaver())
-
-
-agent_graph = create_agent_graph()
+    active_checkpointer = (
+        checkpointer if checkpointer is not None else InMemorySaver()
+    )
+    return builder.compile(checkpointer=active_checkpointer)

@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.ai.client import OpenAICompatibleClient
@@ -9,7 +9,6 @@ from app.agent.article_content import ArticleContentService
 from app.agent.chat import AgentChatService
 from app.agent.context import AgentContext
 from app.agent.fulltext import FullTextEvidenceSelector
-from app.agent.graph import agent_graph
 from app.agent.knowledge_search import KnowledgeSearchService
 from app.agent.reasoning import AgentReasoningService
 from app.agent.web_page_fetch import WebPageFetchService
@@ -84,10 +83,10 @@ def get_ai_service() -> AIService:
     )
 
 
-def get_agent_chat_service() -> AgentChatService:
-    """构建复用全局 InMemory checkpoint Graph 的 Chat Service。"""
+def get_agent_chat_service(request: Request) -> AgentChatService:
+    """返回应用生命周期内复用的 PostgreSQL checkpoint Chat Service。"""
 
-    return AgentChatService(agent_graph)
+    return request.app.state.agent_chat_service
 
 
 def get_web_search_service() -> WebSearchService:

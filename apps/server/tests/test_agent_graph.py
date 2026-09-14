@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.context import AgentContext
 from app.agent.graph import create_agent_graph
@@ -61,7 +62,7 @@ def empty_search_context() -> AgentContext:
 
 
 def test_agent_graph_runs_to_end_with_insufficient_answer() -> None:
-    graph = create_agent_graph()
+    graph = create_agent_graph(InMemorySaver())
     config = {"configurable": {"thread_id": str(uuid4())}}
 
     result = graph.invoke(

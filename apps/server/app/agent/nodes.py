@@ -460,19 +460,20 @@ def get_article_content(
         )
         return update
 
-    article_contents = list(state.get("article_contents", []))
+    article_contents, web_page_contents = _fulltext_selection_inputs(state)
     try:
         if result is not None:
             article_contents.append(result.model_dump(mode="json"))
         article_evidence, web_evidence = runtime.context.fulltext_selector.select(
             query=state["current_query"],
             article_contents=article_contents,
-            web_page_contents=list(state.get("web_page_contents", [])),
+            web_page_contents=web_page_contents,
         )
     except Exception as exc:
         safe_message = f"Article Content 处理失败（{type(exc).__name__}）"
         update.update(
-            article_contents=article_contents,
+            article_contents=[],
+            web_page_contents=[],
             **_tool_outcome_update(
                 state,
                 "get_article_content",
@@ -489,7 +490,8 @@ def get_article_content(
         else ToolExecutionStatus.EMPTY
     )
     update.update(
-        article_contents=article_contents,
+        article_contents=[],
+        web_page_contents=[],
         article_fulltext_evidence=article_evidence,
         web_fulltext_evidence=web_evidence,
         selected_evidence=[],
@@ -578,13 +580,11 @@ def fetch_web_page(
         web_page["published_at"] = (
             web_page.get("published_at") or candidates[index].get("published_at")
         )
-        web_page_contents = [
-            *list(state.get("web_page_contents", [])),
-            web_page,
-        ]
+        article_contents, web_page_contents = _fulltext_selection_inputs(state)
+        web_page_contents.append(web_page)
         article_evidence, web_evidence = runtime.context.fulltext_selector.select(
             query=state["current_query"],
-            article_contents=list(state.get("article_contents", [])),
+            article_contents=article_contents,
             web_page_contents=web_page_contents,
         )
     except Exception as exc:
@@ -605,7 +605,8 @@ def fetch_web_page(
     return {
         **update,
         "fetched_web_urls": [*fetched_urls, url],
-        "web_page_contents": web_page_contents,
+        "article_contents": [],
+        "web_page_contents": [],
         "article_fulltext_evidence": article_evidence,
         "web_fulltext_evidence": web_evidence,
         "selected_evidence": [],
@@ -742,6 +743,32 @@ def _source_from_evidence(item: dict[str, object]) -> dict[str, object]:
         "chunk_id": item["chunk_id"],
         "title": item.get("title"),
     }
+
+
+def _fulltext_selection_inputs(
+    state: AgentState,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """只用已筛选证据重建后续选择输入，避免 checkpoint 保存完整正文。"""
+
+    article_contents = [
+        {
+            "article_id": item.get("article_id"),
+            "title": item.get("title"),
+            "clean_content": item["content"],
+        }
+        for item in state.get("article_fulltext_evidence", [])
+    ]
+    web_page_contents = [
+        {
+            "url": item.get("url"),
+            "title": item.get("title"),
+            "source": item.get("source"),
+            "published_at": item.get("published_at"),
+            "clean_content": item["content"],
+        }
+        for item in state.get("web_fulltext_evidence", [])
+    ]
+    return article_contents, web_page_contents
 
 
 def _insufficient_decision(

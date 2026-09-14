@@ -40,6 +40,6 @@ def chat(
             context=context,
         )
     except Exception as exc:
-        logger.exception("Agent Chat 执行失败", exc_info=exc)
+        logger.error("Agent Chat 执行失败（%s）", type(exc).__name__)
         raise AgentChatInternalError() from exc
     return ApiResponse(code=20000, message="Agent 回答成功", data=data)

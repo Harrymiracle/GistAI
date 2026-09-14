@@ -208,12 +208,12 @@ def test_incomplete_kb_chunk_reads_article_then_answers_from_fulltext() -> None:
 
     assert articles.calls == [7]
     assert result["tool_call_counts"]["get_article_content"] == 1
-    assert result["article_contents"][0]["article_id"] == 7
+    assert result["article_contents"] == []
     fulltext_context = reasoning.decision_inputs[1]["article_fulltext_evidence"]
     assert isinstance(fulltext_context, list)
     assert sum(item["token_count"] for item in fulltext_context) <= 120
     assert sum(len(item["content"]) for item in fulltext_context) < len(
-        result["article_contents"][0]["clean_content"]
+        "目标答案正文。" * 20
     )
     assert reasoning.answer_evidence[0]["source_type"] == "knowledge_base_fulltext"
     assert result["sources"] == [{"article_id": 7, "title": "文章 7"}]
@@ -406,9 +406,12 @@ def test_fetched_page_uses_search_metadata_when_extractor_has_none() -> None:
         web_fetch=fetcher,
     )
 
-    assert result["web_page_contents"][0]["title"] == "搜索标题"
-    assert result["web_page_contents"][0]["source"] == "搜索来源"
-    assert result["web_page_contents"][0]["published_at"] == "2026-09-14"
+    assert result["web_page_contents"] == []
+    assert result["web_fulltext_evidence"][0]["title"] == "搜索标题"
+    assert result["web_fulltext_evidence"][0]["source"] == "搜索来源"
+    assert result["web_fulltext_evidence"][0]["published_at"] == (
+        "2026-09-14T00:00:00"
+    )
 
 
 def test_illegal_web_index_is_rejected_before_fetch() -> None:
@@ -569,11 +572,76 @@ def test_new_run_resets_fulltext_state_and_read_budgets() -> None:
         thread_id=thread_id,
     )
 
-    assert first["article_contents"]
+    assert first["article_contents"] == []
     assert second["article_contents"] == []
     assert second["web_page_contents"] == []
     assert second["tool_call_counts"] == {"knowledge_search": 1}
     assert len(second["messages"]) == 4
+
+
+def test_checkpoints_never_store_raw_full_content_or_runtime_dependencies() -> None:
+    graph = create_agent_graph()
+    thread_id = str(uuid4())
+    reasoning = ScriptedReasoning(
+        [
+            _decision(AgentAction.GET_ARTICLE_CONTENT, selected_article_result_index=0),
+            _decision(AgentAction.ANSWER, selected_article_content_indexes=[0]),
+        ]
+    )
+
+    result, _, _, _ = _invoke(
+        knowledge_ids=[1],
+        reasoning=reasoning,
+        graph=graph,
+        thread_id=thread_id,
+    )
+    history = list(
+        graph.get_state_history({"configurable": {"thread_id": thread_id}})
+    )
+
+    assert result["article_fulltext_evidence"]
+    assert all(
+        snapshot.values.get("article_contents", []) == [] for snapshot in history
+    )
+    assert all(
+        snapshot.values.get("web_page_contents", []) == [] for snapshot in history
+    )
+    assert all("context" not in snapshot.values for snapshot in history)
+
+
+def test_checkpoints_never_store_raw_web_page_content() -> None:
+    graph = create_agent_graph()
+    thread_id = str(uuid4())
+    web_result = WebSearchResult(
+        title="外部资料",
+        url="https://public.example/page",
+        snippet="摘要不完整",
+        source="示例站点",
+    )
+    reasoning = ScriptedReasoning(
+        [
+            _decision(AgentAction.WEB_SEARCH),
+            _decision(AgentAction.FETCH_WEB_PAGE, selected_web_page_result_index=0),
+            _decision(AgentAction.ANSWER, selected_web_page_content_indexes=[0]),
+        ],
+        fresh=True,
+    )
+
+    result, _, _, _ = _invoke(
+        knowledge_ids=[],
+        reasoning=reasoning,
+        web_search=WebSearchStub([web_result]),
+        graph=graph,
+        thread_id=thread_id,
+    )
+    history = list(
+        graph.get_state_history({"configurable": {"thread_id": thread_id}})
+    )
+
+    assert result["web_fulltext_evidence"]
+    assert all(
+        snapshot.values.get("web_page_contents", []) == [] for snapshot in history
+    )
 
 
 def test_worst_case_legal_path_uses_eight_steps_and_always_terminates() -> None:
