@@ -24,7 +24,11 @@ npm install --registry=https://registry.npmmirror.com
 npm run dev:web
 ```
 
-访问 `http://localhost:5173`。开发服务器会将 `/health` 代理到 FastAPI。
+访问 `http://localhost:5173`。开发服务器会将 `/health` 和 `/api` 代理到 FastAPI。
+
+AI 助手页面位于 `/agent`，调用 `POST /api/v1/agent/chat`。首次请求由后端生成
+`thread_id`，同一页面内的后续请求复用该值。当前 checkpoint 仍保存在服务进程内存中，
+因此刷新页面会开始新对话，服务重启后已有对话上下文也会丢失。
 
 ### 后端
 

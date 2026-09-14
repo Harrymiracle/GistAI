@@ -121,3 +121,14 @@ class RAGLLMError(AppError):
 
     def __init__(self, message: str) -> None:
         super().__init__(status_code=502, code=50202, message=message)
+
+
+class AgentChatInternalError(AppError):
+    """Agent Chat 未预期失败时返回的安全错误。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=500,
+            code=50002,
+            message="Agent 暂时无法完成请求，请稍后重试",
+        )

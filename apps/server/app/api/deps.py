@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from app.ai.client import OpenAICompatibleClient
 from app.ai.service import AIService
 from app.agent.article_content import ArticleContentService
+from app.agent.chat import AgentChatService
+from app.agent.context import AgentContext
 from app.agent.fulltext import FullTextEvidenceSelector
+from app.agent.graph import agent_graph
+from app.agent.knowledge_search import KnowledgeSearchService
+from app.agent.reasoning import AgentReasoningService
 from app.agent.web_page_fetch import WebPageFetchService
 from app.agent.web_search import TavilyWebSearchProvider, WebSearchService
 from app.core.config import settings
@@ -79,6 +84,12 @@ def get_ai_service() -> AIService:
     )
 
 
+def get_agent_chat_service() -> AgentChatService:
+    """构建复用全局 InMemory checkpoint Graph 的 Chat Service。"""
+
+    return AgentChatService(agent_graph)
+
+
 def get_web_search_service() -> WebSearchService:
     """根据本机配置构建可替换 Provider 的只读 Web Search Service。"""
 
@@ -137,6 +148,36 @@ def get_embedding_service() -> EmbeddingService:
             timeout_seconds=settings.embedding_timeout_seconds,
         ),
         batch_size=settings.embedding_batch_size,
+    )
+
+
+def get_agent_context(
+    session: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    web_search_service: WebSearchService = Depends(get_web_search_service),
+    crawler_service: CrawlerService = Depends(get_crawler_service),
+) -> AgentContext:
+    """构建绑定当前服务端用户的单次 Agent Runtime Context。"""
+
+    llm_client = OpenAICompatibleClient(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
+    return AgentContext(
+        knowledge_search=KnowledgeSearchService(
+            session=session,
+            user_id=user_id,
+            embedding_service=embedding_service,
+            similarity_threshold=settings.rag_similarity_threshold,
+        ),
+        web_search=web_search_service,
+        reasoning=AgentReasoningService(llm_client),
+        article_content=get_article_content_service(session, user_id),
+        web_page_fetch=get_web_page_fetch_service(crawler_service),
+        fulltext_selector=get_fulltext_evidence_selector(),
     )
 
 

@@ -1,5 +1,7 @@
 import axios from 'axios'
 import { useCallback, useEffect, useState } from 'react'
+import { Link, Route, Routes } from 'react-router-dom'
+import { AgentChatPage } from './pages/AgentChatPage'
 
 type HealthStatus = 'checking' | 'healthy' | 'unavailable'
 
@@ -7,7 +9,7 @@ interface HealthResponse {
   status: string
 }
 
-function App() {
+function HomePage() {
   const [healthStatus, setHealthStatus] = useState<HealthStatus>('checking')
 
   const checkHealth = useCallback(async () => {
@@ -37,11 +39,23 @@ function App() {
         <p className="eyebrow">AI 阅读助手</p>
         <h1>GistAI</h1>
         <p className={`status status--${healthStatus}`}>{statusText}</p>
-        <button type="button" onClick={() => void checkHealth()} disabled={healthStatus === 'checking'}>
-          重新检查
-        </button>
+        <div className="home-actions">
+          <Link className="primary-link" to="/agent">打开知识助手</Link>
+          <button type="button" onClick={() => void checkHealth()} disabled={healthStatus === 'checking'}>
+            重新检查
+          </button>
+        </div>
       </section>
     </main>
+  )
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/agent" element={<AgentChatPage />} />
+    </Routes>
   )
 }
 
