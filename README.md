@@ -63,7 +63,7 @@ Web Search 已通过独立 Provider 接口接入。当前默认实现为 Tavily�
 
 | 服务 | 端口 |
 | --- | ---: |
-| 前端 Vite | 5173 |
+| 前端 Vite | 8088 |
 | FastAPI 后端 | 8000 |
 | PostgreSQL | 5432 |
 
