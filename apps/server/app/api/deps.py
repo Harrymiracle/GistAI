@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.ai.client import OpenAICompatibleClient
 from app.ai.service import AIService
+from app.agent.article_content import ArticleContentService
+from app.agent.fulltext import FullTextEvidenceSelector
+from app.agent.web_page_fetch import WebPageFetchService
 from app.agent.web_search import TavilyWebSearchProvider, WebSearchService
 from app.core.config import settings
 from app.crawler.browser_fetcher import PlaywrightFetcher
@@ -86,6 +89,35 @@ def get_web_search_service() -> WebSearchService:
             timeout_seconds=settings.web_search_timeout_seconds,
         ),
         max_results=settings.web_search_max_results,
+    )
+
+
+def get_article_content_service(
+    session: Session,
+    user_id: int,
+) -> ArticleContentService:
+    """构建绑定当前用户与当前数据库会话的文章全文读取服务。"""
+
+    return ArticleContentService(session=session, user_id=user_id)
+
+
+def get_web_page_fetch_service(
+    crawler: CrawlerService | None = None,
+) -> WebPageFetchService:
+    """构建复用现有安全抓取主链的网页全文读取服务。"""
+
+    return WebPageFetchService(crawler or get_crawler_service())
+
+
+def get_fulltext_evidence_selector() -> FullTextEvidenceSelector:
+    """构建共享单一上下文预算的临时全文证据选择器。"""
+
+    return FullTextEvidenceSelector(
+        chunker=TokenChunker(
+            chunk_size=settings.rag_chunk_size,
+            overlap=settings.rag_chunk_overlap,
+        ),
+        max_context_tokens=settings.agent_max_fulltext_context_tokens,
     )
 
 

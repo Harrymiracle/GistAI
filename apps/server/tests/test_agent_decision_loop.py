@@ -72,6 +72,8 @@ class ScriptedReasoningStub:
         current_query: str,
         kb_evidence: list[dict[str, Any]],
         web_evidence: list[dict[str, Any]],
+        article_fulltext_evidence: list[dict[str, Any]],
+        web_fulltext_evidence: list[dict[str, Any]],
         allowed_actions: list[AgentAction],
         conversation: Sequence[BaseMessage],
     ) -> AgentDecision:
@@ -81,6 +83,8 @@ class ScriptedReasoningStub:
                 "current_query": current_query,
                 "kb_evidence": kb_evidence,
                 "web_evidence": web_evidence,
+                "article_fulltext_evidence": article_fulltext_evidence,
+                "web_fulltext_evidence": web_fulltext_evidence,
                 "allowed_actions": allowed_actions,
                 "conversation": conversation,
             }

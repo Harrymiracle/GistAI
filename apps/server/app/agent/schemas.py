@@ -1,5 +1,6 @@
 from enum import StrEnum
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints
 
@@ -69,6 +70,47 @@ class WebSearchResult(BaseModel):
     published_at: PublishedAt | None = None
 
 
+class ArticleContentResult(BaseModel):
+    """Agent 可见的最小知识库文章全文结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    article_id: int
+    title: str | None
+    clean_content: str
+    url: str | None = None
+    author: str | None = None
+    published_at: datetime | None = None
+
+
+class WebPageContentResult(BaseModel):
+    """Agent 可见的最小外部网页全文结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    title: str | None
+    clean_content: str
+    source: str | None = None
+    published_at: datetime | None = None
+
+
+class FullTextEvidence(BaseModel):
+    """经临时切片、相关性选择和预算限制后的全文证据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["knowledge_base_fulltext", "web_fulltext"]
+    content: str
+    token_count: int = Field(gt=0)
+    temporary_chunk_indexes: list[int]
+    article_id: int | None = None
+    title: str | None = None
+    url: str | None = None
+    source: str | None = None
+    published_at: datetime | None = None
+
+
 class AgentAction(StrEnum):
     """后续 Agent 流程允许使用的动作类型。"""
 
@@ -112,6 +154,16 @@ class AgentDecision(BaseModel):
         max_length=10,
     )
     selected_web_result_indexes: list[ResultIndex] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    selected_article_result_index: ResultIndex | None = None
+    selected_web_page_result_index: ResultIndex | None = None
+    selected_article_content_indexes: list[ResultIndex] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    selected_web_page_content_indexes: list[ResultIndex] = Field(
         default_factory=list,
         max_length=10,
     )

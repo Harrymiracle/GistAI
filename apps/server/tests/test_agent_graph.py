@@ -88,6 +88,10 @@ def test_initialize_sets_queries_and_control_defaults() -> None:
     assert result["web_results"] == []
     assert result["article_contents"] == []
     assert result["web_page_contents"] == []
+    assert result["article_fulltext_evidence"] == []
+    assert result["web_fulltext_evidence"] == []
+    assert result["read_article_ids"] == []
+    assert result["fetched_web_urls"] == []
     assert result["selected_evidence"] == []
     assert result["evidence_status"] is EvidenceStatus.UNKNOWN
     assert result["evidence_reason"] is None
@@ -96,6 +100,8 @@ def test_initialize_sets_queries_and_control_defaults() -> None:
     assert result["tool_call_counts"] == {}
     assert result["allowed_actions"] == []
     assert result["next_action"] is None
+    assert result["selected_article_result_index"] is None
+    assert result["selected_web_page_result_index"] is None
     assert result["last_tool_error"] is None
     assert result["final_answer"] is None
     assert result["sources"] == []

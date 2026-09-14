@@ -19,6 +19,10 @@ class AgentState(MessagesState, total=False):
     web_results: list[dict[str, Any]]
     article_contents: list[dict[str, Any]]
     web_page_contents: list[dict[str, Any]]
+    article_fulltext_evidence: list[dict[str, Any]]
+    web_fulltext_evidence: list[dict[str, Any]]
+    read_article_ids: list[int]
+    fetched_web_urls: list[str]
 
     selected_evidence: list[dict[str, Any]]
     evidence_status: EvidenceStatus
@@ -29,6 +33,8 @@ class AgentState(MessagesState, total=False):
     tool_call_counts: dict[str, int]
     allowed_actions: list[AgentAction]
     next_action: AgentAction | None
+    selected_article_result_index: int | None
+    selected_web_page_result_index: int | None
 
     last_tool_error: str | None
 

@@ -54,6 +54,8 @@ def test_reasoning_service_parses_decision_rewrite_and_answer() -> None:
                 "published_at": "2026-09-14",
             }
         ],
+        article_fulltext_evidence=[],
+        web_fulltext_evidence=[],
         allowed_actions=[AgentAction.ANSWER, AgentAction.REWRITE_QUERY],
         conversation=[],
     )
@@ -107,8 +109,10 @@ def test_reasoning_service_rejects_malformed_decision(raw_result: str) -> None:
         service.decide(
             original_query="问题",
             current_query="问题",
-            kb_evidence=[],
-            web_evidence=[],
+                kb_evidence=[],
+                web_evidence=[],
+                article_fulltext_evidence=[],
+                web_fulltext_evidence=[],
             allowed_actions=[AgentAction.INSUFFICIENT],
             conversation=[],
         )

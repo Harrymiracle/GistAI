@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     web_search_api_key: SecretStr = SecretStr("")
     web_search_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     web_search_max_results: int = Field(default=5, ge=1, le=10)
+    agent_max_fulltext_context_tokens: int = Field(default=8000, ge=1000, le=20000)
     embedding_base_url: str = ""
     embedding_api_key: SecretStr = SecretStr("")
     embedding_model: str = "text-embedding-v4"
