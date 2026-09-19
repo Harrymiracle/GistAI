@@ -41,7 +41,7 @@ function HomePage() {
         <p className={`status status--${healthStatus}`}>{statusText}</p>
         <div className="home-actions">
           <Link className="primary-link" to="/agent">打开知识助手</Link>
-          <button type="button" onClick={() => void checkHealth()} disabled={healthStatus === 'checking'}>
+          <button className="health-button" type="button" onClick={() => void checkHealth()} disabled={healthStatus === 'checking'}>
             重新检查
           </button>
         </div>

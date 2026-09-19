@@ -1,205 +1,113 @@
-import { useMutation } from '@tanstack/react-query'
-import { FormEvent, KeyboardEvent, useState } from 'react'
+import { ArrowLeft, BookOpenText, LoaderCircle, Sparkles } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  agentApi,
-  AgentResponseStatus,
-  AgentSource,
-} from '../api/agent'
+import { ChatInput } from '@/components/chat/ChatInput'
+import { ChatMessage } from '@/components/chat/ChatMessage'
+import { useAgentChat } from '@/hooks/useAgentChat'
 
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  status?: AgentResponseStatus
-  sources?: AgentSource[]
-}
-
-interface ChatVariables {
-  message: string
-  threadId: string | null
-}
-
-const statusNotices: Partial<Record<AgentResponseStatus, string>> = {
-  partial: '部分信息有依据，但现有证据不足以覆盖全部问题。',
-  insufficient: '当前知识库和允许使用的外部资料中，没有找到足够证据。',
-  error: '本次处理未能正常完成，请稍后重试。',
-}
-
-function messageId(): string {
-  return crypto.randomUUID()
-}
-
-function SourceList({ sources }: { sources: AgentSource[] }) {
-  if (sources.length === 0) {
-    return null
-  }
-
-  return (
-    <section className="sources" aria-label="回答来源">
-      <h3>资料来源</h3>
-      <ul>
-        {sources.map((source, index) => (
-          <li key={`${source.source_type}-${source.article_id ?? source.url}-${index}`}>
-            {source.source_type === 'web' && source.url ? (
-              <a href={source.url} target="_blank" rel="noopener noreferrer">
-                {source.title}
-              </a>
-            ) : (
-              <span>{source.title}</span>
-            )}
-            <small>
-              {source.source_type === 'knowledge_base'
-                ? '个人知识库'
-                : [source.source, source.published_at].filter(Boolean).join(' · ') ||
-                  '外部网页'}
-            </small>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
+const exampleQuestions = [
+  '总结我保存的文章里关于 Agent Memory 的观点',
+  '我的知识库中有哪些内容讨论了 RAG？',
+  '结合已有资料解释一个最近关注的话题',
+]
 
 export function AgentChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [threadId, setThreadId] = useState<string | null>(null)
-  const [input, setInput] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const { messages, sendMessage, isPending, error } = useAgentChat()
+  const conversationEndRef = useRef<HTMLDivElement>(null)
 
-  const mutation = useMutation({
-    mutationFn: ({ message, threadId: activeThreadId }: ChatVariables) =>
-      agentApi.chat({
-        message,
-        ...(activeThreadId ? { thread_id: activeThreadId } : {}),
-      }),
-    onSuccess: (response) => {
-      setThreadId(response.thread_id)
-      setMessages((current) => [
-        ...current,
-        {
-          id: messageId(),
-          role: 'assistant',
-          content: response.answer,
-          status: response.status,
-          sources: response.sources,
-        },
-      ])
-    },
-    onError: () => {
-      setError('暂时无法连接 AI 助手，请稍后重试。')
-    },
-  })
-
-  const submitMessage = () => {
-    const message = input.trim()
-    if (!message || mutation.isPending) {
+  useEffect(() => {
+    if (messages.length === 0 && !isPending) {
       return
     }
 
-    setError(null)
-    setInput('')
-    setMessages((current) => [
-      ...current,
-      { id: messageId(), role: 'user', content: message },
-    ])
-    mutation.mutate({ message, threadId })
-  }
+    const prefersReducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches
 
-  const handleSubmit = (event: FormEvent) => {
-    event.preventDefault()
-    submitMessage()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      submitMessage()
-    }
-  }
-
-  const startNewChat = () => {
-    setMessages([])
-    setThreadId(null)
-    setInput('')
-    setError(null)
-    mutation.reset()
-  }
+    conversationEndRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'end',
+    })
+  }, [messages, isPending])
 
   return (
-    <main className="chat-shell">
-      <section className="chat-card">
-        <header className="chat-header">
-          <div>
-            <Link className="back-link" to="/">返回首页</Link>
-            <p className="eyebrow">AI 阅读助手</p>
-            <h1>知识助手</h1>
-            <p>基于你的知识库和允许访问的外部资料回答问题。</p>
-          </div>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={startNewChat}
-            disabled={mutation.isPending}
+    <main className="min-h-svh bg-slate-100 px-0 py-0 text-slate-950 sm:px-5 sm:py-6">
+      <section className="mx-auto grid min-h-svh w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-white sm:min-h-[calc(100svh-3rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-xl sm:shadow-slate-900/5">
+        <header className="border-b border-slate-200 bg-white px-5 py-4 sm:px-8 sm:py-5">
+          <Link
+            className="mb-3 inline-flex items-center gap-1.5 text-sm text-slate-500 transition-colors hover:text-slate-900"
+            to="/"
           >
-            新对话
-          </button>
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            返回首页
+          </Link>
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-xl bg-blue-600 text-white shadow-sm">
+              <BookOpenText className="size-5" aria-hidden="true" />
+            </span>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
+                GistAI 知识助手
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                基于个人知识库和允许访问的外部资料回答问题。
+              </p>
+            </div>
+          </div>
         </header>
 
-        <div className="conversation" aria-live="polite">
+        <div
+          className="overflow-y-auto bg-slate-50/70 px-5 py-6 sm:px-8 sm:py-8"
+          aria-live="polite"
+          aria-busy={isPending}
+        >
           {messages.length === 0 ? (
-            <div className="empty-chat">
-              <h2>从一个问题开始</h2>
-              <p>例如：我保存的文章里，Agent Memory 是怎么说的？</p>
+            <div className="mx-auto flex h-full max-w-2xl flex-col justify-center py-10 text-center">
+              <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-blue-50 text-blue-700">
+                <Sparkles className="size-6" aria-hidden="true" />
+              </span>
+              <h2 className="mt-5 text-2xl font-semibold tracking-tight text-slate-900">
+                从你的知识开始提问
+              </h2>
+              <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
+                我会优先结合你的个人知识库，并在允许时参考外部资料。
+              </p>
+              <ul className="mx-auto mt-7 grid w-full max-w-xl gap-2 text-left text-sm text-slate-600 sm:grid-cols-3">
+                {exampleQuestions.map((question) => (
+                  <li
+                    className="rounded-xl border border-slate-200 bg-white px-3.5 py-3.5 leading-5 shadow-sm"
+                    key={question}
+                  >
+                    {question}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : (
-            messages.map((message) => (
-              <article
-                className={`message message--${message.role}`}
-                key={message.id}
-              >
-                <p className="message-role">
-                  {message.role === 'user' ? '你' : '知识助手'}
-                </p>
-                <div className="message-content">{message.content}</div>
-                {message.status && statusNotices[message.status] ? (
-                  <p className={`answer-notice answer-notice--${message.status}`}>
-                    {statusNotices[message.status]}
-                  </p>
-                ) : null}
-                <SourceList sources={message.sources ?? []} />
-              </article>
-            ))
+            <div className="mx-auto flex max-w-3xl flex-col gap-7">
+              {messages.map((message) => (
+                <ChatMessage message={message} key={message.id} />
+              ))}
+            </div>
           )}
-          {mutation.isPending ? (
-            <div className="thinking" role="status">
+
+          {isPending ? (
+            <div
+              className="mx-auto mt-6 flex max-w-3xl items-center gap-2 text-sm text-slate-500"
+              role="status"
+            >
+              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
               正在思考并查找资料…
             </div>
           ) : null}
+          <div ref={conversationEndRef} aria-hidden="true" />
         </div>
 
-        <form className="composer" onSubmit={handleSubmit}>
-          {error ? <p className="request-error">{error}</p> : null}
-          <div className="composer-row">
-            <textarea
-              aria-label="输入问题"
-              value={input}
-              maxLength={4000}
-              placeholder="输入你的问题…"
-              rows={3}
-              disabled={mutation.isPending}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
-            />
-            <button
-              type="submit"
-              disabled={mutation.isPending || input.trim().length === 0}
-            >
-              {mutation.isPending ? '处理中' : '发送'}
-            </button>
-          </div>
-          <p className="composer-hint">Enter 发送，Shift+Enter 换行</p>
-        </form>
+        <ChatInput
+          isPending={isPending}
+          error={error}
+          onSend={sendMessage}
+        />
       </section>
     </main>
   )
