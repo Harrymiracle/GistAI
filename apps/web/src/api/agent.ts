@@ -1,41 +1,25 @@
-import { request } from './request'
+import type { ApiResponse } from '../types/api'
+import type { AgentChatData, AgentChatRequest } from '../types/agent'
+import { apiClient } from './client'
 
-export type AgentResponseStatus = 'answer' | 'partial' | 'insufficient' | 'error'
+export type {
+  AgentChatData,
+  AgentChatRequest,
+  AgentResponseStatus,
+  AgentSource,
+} from '../types/agent'
 
-export interface AgentSource {
-  source_type: 'knowledge_base' | 'web'
-  title: string
-  article_id: number | null
-  chunk_id: number | null
-  url: string | null
-  source: string | null
-  published_at: string | null
-}
+export async function sendAgentMessage(
+  payload: AgentChatRequest,
+): Promise<AgentChatData> {
+  const response = await apiClient.post<ApiResponse<AgentChatData>>(
+    '/agent/chat',
+    payload,
+  )
 
-export interface AgentChatRequest {
-  message: string
-  thread_id?: string
-}
-
-export interface AgentChatResponse {
-  thread_id: string
-  answer: string
-  status: AgentResponseStatus
-  sources: AgentSource[]
-}
-
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
+  return response.data.data
 }
 
 export const agentApi = {
-  async chat(payload: AgentChatRequest): Promise<AgentChatResponse> {
-    const response = await request.post<ApiResponse<AgentChatResponse>>(
-      '/agent/chat',
-      payload,
-    )
-    return response.data.data
-  },
+  chat: sendAgentMessage,
 }
