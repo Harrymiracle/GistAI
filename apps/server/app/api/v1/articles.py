@@ -22,6 +22,7 @@ from app.schemas.article import (
     ArticleListItem,
     ArticleReprocessData,
     ManualContentRequest,
+    ManualArticleImportRequest,
     ArticleStatus,
     ArticleUpdate,
 )
@@ -107,6 +108,37 @@ def set_manual_content(
 
 
 @router.post(
+    "/{article_id}/manual-import",
+    response_model=ApiResponse[ArticleDetail],
+)
+def import_manual_article(
+    article_id: int,
+    payload: ManualArticleImportRequest,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+    min_content_chars: MinimumContentChars,
+    ai_service: ArticleAI,
+    embedding_service: ArticleEmbedding,
+) -> ApiResponse[ArticleDetail]:
+    """从无正文的抓取失败记录恢复原链接，或另建新链接文章。"""
+
+    article = ArticleService.import_manual_from_failed(
+        session,
+        article_id,
+        user_id,
+        payload,
+        min_content_chars,
+        ai_service,
+        embedding_service,
+    )
+    return ApiResponse(
+        code=20000,
+        message="手动正文处理完成",
+        data=ArticleDetail.model_validate(article),
+    )
+
+
+@router.post(
     "/{article_id}/reprocess",
     response_model=ApiResponse[ArticleReprocessData],
 )
@@ -118,7 +150,7 @@ def reprocess_article(
     ai_service: ArticleAI,
     embedding_service: ArticleEmbedding,
 ) -> ApiResponse[ArticleReprocessData]:
-    """重新抓取并在完整 Pipeline 成功后原子替换旧结果。"""
+    """按阶段状态继续处理；没有可用正文时重新抓取。"""
 
     article, content_unchanged = ArticleService.reprocess(
         session,
@@ -128,8 +160,10 @@ def reprocess_article(
         ai_service,
         embedding_service,
     )
-    if content_unchanged:
-        message = "Article 正文未变化，已跳过 AI 与 Embedding"
+    if content_unchanged and article.status == "completed":
+        message = "Article 正文未变化，处理完成"
+    elif content_unchanged:
+        message = "Article 正文未变化，后续处理仍未完成"
     elif article.status == "completed":
         message = "Article 重处理成功"
     else:
@@ -218,6 +252,7 @@ def list_articles(
         Query(alias="status"),
     ] = None,
     source_type: Annotated[str | None, Query(min_length=1, max_length=32)] = None,
+    tag_id: Annotated[int | None, Query(ge=1)] = None,
 ) -> ApiResponse[ArticleListData]:
     """按创建时间倒序返回 Article 分页列表。"""
 
@@ -229,6 +264,7 @@ def list_articles(
         favorite=favorite,
         status=status_filter,
         source_type=source_type,
+        tag_id=tag_id,
     )
     data = ArticleListData(
         items=[ArticleListItem.model_validate(article) for article in articles],

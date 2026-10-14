@@ -18,7 +18,11 @@ const exampleQuestions = [
   'RAG 的基本工作流程是什么？',
 ]
 
-export function AgentChatPage() {
+interface AgentChatPageProps {
+  chat: ReturnType<typeof useAgentChat>
+}
+
+export function AgentChatPage({ chat }: AgentChatPageProps) {
   const {
     messages,
     allowWeb,
@@ -27,7 +31,7 @@ export function AgentChatPage() {
     newChat,
     isPending,
     error,
-  } = useAgentChat()
+  } = chat
   const conversationEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

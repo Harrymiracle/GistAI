@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { createArticle } from '@/api/articles'
+import { createArticle, getExistingArticleId } from '@/api/articles'
 import { Button } from '@/components/ui/button'
 import type { ArticleDetail } from '@/types/article'
 
@@ -65,7 +65,7 @@ export function ArticleImportPage() {
     event.preventDefault()
     const sourceUrl = url.trim()
 
-    if (!sourceUrl) {
+    if (!sourceUrl || mutation.isPending) {
       return
     }
 
@@ -80,6 +80,7 @@ export function ArticleImportPage() {
   const isProcessingFailed =
     article?.status === 'failed' || article?.status === 'partial_failed'
   const processingFailures = article ? getProcessingFailures(article) : []
+  const existingArticleId = getExistingArticleId(mutation.error)
 
   return (
     <main className="min-h-svh bg-slate-100 px-5 py-8 text-slate-950 sm:py-14">
@@ -156,6 +157,11 @@ export function ArticleImportPage() {
               <div>
                 <p className="font-medium">导入请求失败</p>
                 <p className="mt-1 leading-6">{getErrorMessage(mutation.error)}</p>
+                {existingArticleId ? (
+                  <Link className="mt-2 inline-block font-medium underline" to={`/articles/${existingArticleId}`}>
+                    查看已有文章 #{existingArticleId} 及可用恢复操作
+                  </Link>
+                ) : null}
               </div>
             </div>
           </div>
@@ -173,6 +179,7 @@ export function ArticleImportPage() {
               />
               <div className="min-w-0">
                 <h2 className="font-semibold">导入成功</h2>
+                <p className="mt-1 text-sm">文章 ID：{article.id}</p>
                 <p className="mt-1 truncate text-sm text-emerald-800">
                   {article.title ?? article.source_url}
                 </p>
@@ -185,6 +192,7 @@ export function ArticleImportPage() {
                 >
                   去 Agent Chat
                 </Link>
+                <Link className="ml-4 text-sm font-medium text-emerald-800 underline" to={`/articles/${article.id}`}>查看文章详情</Link>
               </div>
             </div>
           </div>
@@ -202,6 +210,7 @@ export function ArticleImportPage() {
               />
               <div>
                 <h2 className="font-semibold">文章未能完整导入</h2>
+                <p className="mt-1 text-sm">文章 ID：{article.id}</p>
                 <p className="mt-1 text-sm leading-6 text-amber-800">
                   Article 已创建，但同步处理链路存在失败阶段。
                 </p>
@@ -217,6 +226,12 @@ export function ArticleImportPage() {
                 ) : (
                   <p className="mt-3 text-sm">后端未返回具体的阶段错误信息。</p>
                 )}
+                <div className="mt-4 flex flex-wrap gap-4 text-sm font-medium">
+                  <Link className="underline" to={`/articles/${article.id}`}>查看详情并重新抓取</Link>
+                  {article.fetch_status === 'failed' && !article.clean_content ? (
+                    <Link className="underline" to={`/articles/${article.id}/manual`}>粘贴正文手动导入</Link>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>

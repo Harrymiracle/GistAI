@@ -60,6 +60,13 @@ class ManualContentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class ManualArticleImportRequest(BaseModel):
+    """从抓取失败记录提交链接和手动正文。"""
+
+    source_url: HttpUrl
+    content: str = Field(min_length=1)
+
+
 class ArticleListItem(BaseModel):
     """文章列表中的轻量数据。"""
 
@@ -71,6 +78,7 @@ class ArticleListItem(BaseModel):
     source_type: str
     source_name: str | None
     one_sentence_summary: str | None
+    tags: list[str] = Field(default_factory=list)
     favorite: bool
     status: str
     fetch_status: str
@@ -78,6 +86,13 @@ class ArticleListItem(BaseModel):
     embedding_status: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def serialize_tag_names(cls, tags: object) -> object:
+        if isinstance(tags, list):
+            return [getattr(tag, "name", tag) for tag in tags]
+        return tags
 
 
 class ArticleListData(BaseModel):

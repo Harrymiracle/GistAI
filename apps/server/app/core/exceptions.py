@@ -53,6 +53,17 @@ class ArticleProcessingConflictError(AppError):
         )
 
 
+class ArticleManualRecoveryUnavailableError(AppError):
+    """原记录已含有效正文或不处于抓取失败状态。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            code=40904,
+            message="仅可从尚无正文的抓取失败记录进行手动导入",
+        )
+
+
 class ArticleContentUnavailableError(AppError):
     """Article 没有可用于重新生成的有效正文。"""
 

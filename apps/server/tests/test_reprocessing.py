@@ -238,6 +238,70 @@ def test_reprocess_fetch_failure_preserves_all_old_data(
     assert article.ai_status == "completed"
     assert article.embedding_status == "completed"
     assert article.status == "partial_failed"
+
+
+def test_reprocess_recovers_first_fetch_failure(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = Article(
+        user_id=1,
+        source_type="web",
+        source_url=f"https://reprocess.example/failed-{uuid4()}",
+        status="failed",
+        fetch_status="failed",
+        fetch_error="初次抓取失败",
+        ai_status="pending",
+        embedding_status="pending",
+    )
+    db_session.add(article)
+    db_session.commit()
+    db_session.refresh(article)
+    crawler, ai, embedding = CrawlerStub(), AIStub(), EmbeddingStub()
+    configure(crawler, ai, embedding)
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    result = response.json()["data"]["article"]
+    assert result["id"] == article.id
+    assert result["status"] == "completed"
+    assert result["fetch_error"] is None
+    assert result["clean_content"] == NEW_CONTENT
+    assert crawler.calls == ai.calls == embedding.calls == 1
+
+
+def test_reprocess_first_fetch_failure_can_fail_again(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = Article(
+        user_id=1,
+        source_type="web",
+        source_url=f"https://reprocess.example/failed-{uuid4()}",
+        status="failed",
+        fetch_status="failed",
+        fetch_error="初次抓取失败",
+        ai_status="pending",
+        embedding_status="pending",
+    )
+    db_session.add(article)
+    db_session.commit()
+    db_session.refresh(article)
+    crawler = CrawlerStub(error=CrawlerFallbackError("再次抓取失败"))
+    ai, embedding = AIStub(), EmbeddingStub()
+    configure(crawler, ai, embedding)
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    result = response.json()["data"]["article"]
+    assert result["id"] == article.id
+    assert result["status"] == "failed"
+    assert result["fetch_error"] == "再次抓取失败"
+    assert result["clean_content"] is None
+    assert crawler.calls == 1
+    assert ai.calls == embedding.calls == 0
     assert ai.calls == embedding.calls == 0
 
 
@@ -300,6 +364,7 @@ def test_reprocess_embedding_failure_restores_previous_failed_ai_state(
     article = create_completed_article(
         db_session,
         status="partial_failed",
+        fetch_status="failed",
         ai_status="failed",
     )
     article.ai_error = "旧 AI 错误"
@@ -348,7 +413,7 @@ def test_reprocess_unchanged_hash_skips_ai_and_embedding(
     assert ai.calls == embedding.calls == 0
 
 
-def test_reprocess_recovers_partial_failed_article(
+def test_reprocess_continues_ai_and_embedding_without_refetch(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -356,19 +421,53 @@ def test_reprocess_recovers_partial_failed_article(
         db_session,
         status="partial_failed",
         ai_status="failed",
-        embedding_status="failed",
+        embedding_status="pending",
     )
-    configure(CrawlerStub(), AIStub(), EmbeddingStub())
+    article.ai_error = "手动导入后的 AI 处理失败"
+    db_session.commit()
+    ai, embedding = AIStub(), EmbeddingStub()
+    configure(ExplodingService(), ai, embedding)
 
     data = client.post(f"/api/v1/articles/{article.id}/reprocess").json()["data"][
         "article"
     ]
 
     assert data["status"] == "completed"
+    assert data["clean_content"] == OLD_CONTENT
+    assert data["content_hash"] == hashlib.sha256(OLD_CONTENT.encode()).hexdigest()
     assert data["ai_status"] == "completed"
     assert data["embedding_status"] == "completed"
     assert data["ai_error"] is None
     assert data["embedding_error"] is None
+    assert ai.contents == [OLD_CONTENT]
+    assert embedding.contents == [OLD_CONTENT]
+
+
+def test_reprocess_continues_embedding_without_refetch_or_ai(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = create_completed_article(
+        db_session,
+        status="partial_failed",
+        embedding_status="failed",
+    )
+    article.embedding_error = "手动导入后的 Embedding 处理失败"
+    db_session.commit()
+    old_values = article_values(article)
+    embedding = EmbeddingStub()
+    configure(ExplodingService(), ExplodingService(), embedding)
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["content_unchanged"] is True
+    assert data["article"]["status"] == "completed"
+    assert data["article"]["embedding_status"] == "completed"
+    db_session.refresh(article)
+    assert article_values(article) == old_values
+    assert embedding.contents == [OLD_CONTENT]
 
 
 def test_regenerate_ai_only_replaces_ai_and_tags(

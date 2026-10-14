@@ -200,3 +200,115 @@ def test_manual_content_does_not_call_http_or_playwright(
 
     assert response.status_code == 200
     assert crawler.calls == 0
+
+
+def test_manual_import_same_url_recovers_original_article(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+
+    response = client.post(
+        f"/api/v1/articles/{article.id}/manual-import",
+        json={"source_url": article.source_url, "content": MANUAL_CONTENT},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["id"] == article.id
+    assert data["status"] == "completed"
+    assert data["fetch_status"] == "completed"
+    assert data["source_url"] == article.source_url
+    assert db_session.scalar(select(Article.id).where(Article.source_url == article.source_url)) == article.id
+
+
+def test_manual_import_changed_url_creates_article_without_changing_original(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    original = add_article(db_session)
+    new_url = f"https://manual.example/new-{uuid4()}"
+
+    response = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"source_url": new_url, "content": MANUAL_CONTENT},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["id"] != original.id
+    assert data["source_url"] == new_url
+    assert data["status"] == "completed"
+    db_session.refresh(original)
+    assert original.status == "failed"
+    assert original.clean_content is None
+    assert original.fetch_error == "普通 HTTP 与 Playwright 均失败"
+
+
+def test_manual_import_duplicate_url_returns_existing_id_without_overwriting(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    original = add_article(db_session)
+    existing = add_article(db_session)
+
+    response = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"source_url": existing.source_url, "content": MANUAL_CONTENT},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["data"]["article_id"] == existing.id
+    db_session.refresh(existing)
+    assert existing.clean_content is None
+    db_session.refresh(original)
+    assert original.clean_content is None
+
+
+def test_manual_import_rejects_invalid_content_and_existing_valid_content(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    original = add_article(db_session)
+    new_url = f"https://manual.example/new-{uuid4()}"
+    invalid = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"source_url": new_url, "content": "太短"},
+    )
+    assert invalid.status_code == 422
+    assert db_session.scalar(select(Article.id).where(Article.source_url == new_url)) is None
+
+    old_content = "已有有效正文。" * 40
+    original.clean_content = old_content
+    original.status = "partial_failed"
+    db_session.commit()
+    rejected = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"source_url": original.source_url, "content": MANUAL_CONTENT},
+    )
+    assert rejected.status_code == 409
+    db_session.refresh(original)
+    assert original.clean_content == old_content
+
+
+def test_manual_import_requires_url_and_rejects_processing_record(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    original = add_article(db_session)
+    missing_url = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"content": MANUAL_CONTENT},
+    )
+    assert missing_url.status_code == 422
+
+    original.status = "processing"
+    db_session.commit()
+    processing = client.post(
+        f"/api/v1/articles/{original.id}/manual-import",
+        json={"source_url": original.source_url, "content": MANUAL_CONTENT},
+    )
+    assert processing.status_code == 409
+    assert processing.json()["code"] == 40903
+    db_session.refresh(original)
+    assert original.clean_content is None

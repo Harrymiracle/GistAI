@@ -11,6 +11,7 @@ from app.ai.schemas import AIArticleResult
 from app.ai.service import ArticleAIProcessor
 from app.core.exceptions import (
     ArticleAlreadyExistsError,
+    ArticleManualRecoveryUnavailableError,
     ArticleContentUnavailableError,
     ArticleNotFoundError,
     ArticleProcessingConflictError,
@@ -28,7 +29,7 @@ from app.models.article import Article
 from app.models.article_chunk import ArticleChunk
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
-from app.schemas.article import ArticleCreate, ArticleUpdate
+from app.schemas.article import ArticleCreate, ArticleUpdate, ManualArticleImportRequest
 
 
 PENDING_STATUS = "pending"
@@ -211,6 +212,54 @@ class ArticleService:
         return cls.process_embedding_if_ready(session, article, embedding_service)
 
     @classmethod
+    def import_manual_from_failed(
+        cls,
+        session: Session,
+        article_id: int,
+        user_id: int,
+        payload: ManualArticleImportRequest,
+        min_content_chars: int,
+        ai_service: ArticleAIProcessor,
+        embedding_service: ArticleEmbeddingProcessor,
+    ) -> Article:
+        """同链接恢复原失败记录，不同链接创建新记录，且不触发抓取。"""
+
+        try:
+            clean_and_validate_content(
+                payload.content,
+                min_content_chars,
+                content_label="手动正文",
+            )
+        except ContentValidationError as exc:
+            raise ManualContentInvalidError(str(exc)) from exc
+
+        original = cls._get_article_for_update(session, article_id, user_id)
+        cls._ensure_not_processing(original)
+        if original.fetch_status != FAILED_STATUS or original.clean_content:
+            raise ArticleManualRecoveryUnavailableError()
+
+        source_url = str(payload.source_url)
+        if source_url == original.source_url:
+            target_id = original.id
+        else:
+            target = cls._create_pending_article(
+                session,
+                ArticleCreate(source_url=payload.source_url, source_type="web"),
+                user_id,
+            )
+            target_id = target.id
+
+        return cls.set_manual_content_and_process(
+            session,
+            target_id,
+            user_id,
+            payload.content,
+            min_content_chars,
+            ai_service,
+            embedding_service,
+        )
+
+    @classmethod
     def process_ai_if_ready(
         cls,
         session: Session,
@@ -322,10 +371,29 @@ class ArticleService:
         ai_service: ArticleAIProcessor,
         embedding_service: ArticleEmbeddingProcessor,
     ) -> tuple[Article, bool]:
-        """在完整新 Pipeline 准备成功后原子替换旧有效数据。"""
+        """按现有阶段状态继续处理，必要时才重新抓取并替换完整 Pipeline。"""
 
         article = cls._get_article_for_update(session, article_id, user_id)
         cls._ensure_not_processing(article)
+        if (
+            article.fetch_status == COMPLETED_STATUS
+            and article.clean_content
+            and (
+                article.ai_status != COMPLETED_STATUS
+                or article.embedding_status != COMPLETED_STATUS
+            )
+        ):
+            if article.ai_status != COMPLETED_STATUS:
+                article = cls.process_ai_if_ready(session, article, ai_service)
+            if (
+                article.ai_status == COMPLETED_STATUS
+                and article.embedding_status != COMPLETED_STATUS
+            ):
+                article = cls.process_embedding_if_ready(
+                    session, article, embedding_service
+                )
+            return cls._refresh(session, article), True
+
         cls._validate_reprocessable_url(article.source_url)
         previous_ai_status = article.ai_status
         previous_ai_error = article.ai_error
@@ -774,6 +842,7 @@ class ArticleService:
         favorite: bool | None,
         status: str | None,
         source_type: str | None,
+        tag_id: int | None,
     ) -> tuple[list[Article], int]:
         filters = [Article.user_id == user_id]
         if favorite is not None:
@@ -782,6 +851,8 @@ class ArticleService:
             filters.append(Article.status == status)
         if source_type is not None:
             filters.append(Article.source_type == source_type)
+        if tag_id is not None:
+            filters.append(Article.tags.any(Tag.id == tag_id))
 
         total = session.scalar(
             select(func.count()).select_from(Article).where(*filters)

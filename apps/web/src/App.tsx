@@ -2,7 +2,12 @@ import axios from 'axios'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Route, Routes } from 'react-router-dom'
 import { AgentChatPage } from './pages/AgentChatPage'
+import { ArticleDetailPage } from './pages/ArticleDetailPage'
 import { ArticleImportPage } from './pages/ArticleImportPage'
+import { ArticleListPage } from './pages/ArticleListPage'
+import { ArticleManualImportPage } from './pages/ArticleManualImportPage'
+import { TagListPage } from './pages/TagListPage'
+import { useAgentChat } from './hooks/useAgentChat'
 
 type HealthStatus = 'checking' | 'healthy' | 'unavailable'
 
@@ -42,6 +47,8 @@ function HomePage() {
         <p className={`status status--${healthStatus}`}>{statusText}</p>
         <div className="home-actions">
           <Link className="primary-link" to="/articles/import">导入文章</Link>
+          <Link className="primary-link" to="/articles">我的文章</Link>
+          <Link className="primary-link" to="/tags">文章标签</Link>
           <Link className="primary-link" to="/agent">打开知识助手</Link>
           <button className="health-button" type="button" onClick={() => void checkHealth()} disabled={healthStatus === 'checking'}>
             重新检查
@@ -53,11 +60,17 @@ function HomePage() {
 }
 
 function App() {
+  const agentChat = useAgentChat()
+
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/articles/import" element={<ArticleImportPage />} />
-      <Route path="/agent" element={<AgentChatPage />} />
+      <Route path="/articles" element={<ArticleListPage />} />
+      <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
+      <Route path="/articles/:articleId/manual" element={<ArticleManualImportPage />} />
+      <Route path="/tags" element={<TagListPage />} />
+      <Route path="/agent" element={<AgentChatPage chat={agentChat} />} />
     </Routes>
   )
 }

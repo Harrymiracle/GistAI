@@ -10,6 +10,40 @@ export interface ArticleCreateRequest {
   source_type: 'web'
 }
 
+export interface ManualArticleImportRequest {
+  source_url: string
+  content: string
+}
+
+export interface ArticleReprocessData {
+  content_unchanged: boolean
+  article: ArticleDetail
+}
+
+export interface ArticleListItem {
+  id: number
+  title: string | null
+  source_url: string
+  source_type: string
+  source_name: string | null
+  one_sentence_summary: string | null
+  tags: string[]
+  favorite: boolean
+  status: ArticleProcessingStatus
+  fetch_status: ArticleProcessingStatus
+  ai_status: ArticleProcessingStatus
+  embedding_status: ArticleProcessingStatus
+  created_at: string
+  updated_at: string
+}
+
+export interface ArticleListData {
+  items: ArticleListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface ArticleDetail {
   id: number
   user_id: number

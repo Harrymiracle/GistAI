@@ -237,6 +237,14 @@ def test_fetch_failure_keeps_article_and_updates_status(
     assert status_response.status_code == 200
     assert status_response.json()["data"]["fetch_error"] == "网页请求超时"
 
+    detail_response = client.get(f"/api/v1/articles/{data['id']}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["fetch_error"] == "网页请求超时"
+    list_response = client.get(
+        "/api/v1/articles", params={"status": "failed", "page_size": 100}
+    )
+    assert data["id"] in [item["id"] for item in list_response.json()["data"]["items"]]
+
 
 def test_short_content_keeps_article_and_marks_fetch_failed(
     client: TestClient,
