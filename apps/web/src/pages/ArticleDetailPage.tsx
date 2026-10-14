@@ -224,11 +224,19 @@ export function ArticleDetailPage() {
             </section>
 
             <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
-              <h2 className="text-lg font-semibold">标签</h2>
+              <h2 className="text-lg font-semibold">正式主题</h2>
               <div className="mt-4 flex flex-wrap gap-2">
                 {article.data.tags.map((tag) => <span className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-800" key={tag}>{tag}</span>)}
-                {article.data.tags.length === 0 ? <span className="text-sm text-slate-500">暂无标签</span> : null}
+                {article.data.tags.length === 0 ? <span className="text-sm text-slate-500">暂无正式主题</span> : null}
               </div>
+              {article.data.pending_topics.length > 0 ? (
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <h3 className="text-sm font-semibold text-slate-700">待整理主题</h3>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {article.data.pending_topics.map((topic) => <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700" key={topic}>{topic}</span>)}
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <ProcessingStages article={article.data} />

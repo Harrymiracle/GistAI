@@ -29,6 +29,7 @@ export interface ArticleListItem {
   source_name: string | null
   one_sentence_summary: string | null
   tags: string[]
+  pending_topics: string[]
   favorite: boolean
   status: ArticleProcessingStatus
   fetch_status: ArticleProcessingStatus
@@ -60,6 +61,7 @@ export interface ArticleDetail {
   detailed_summary: string | null
   key_points: string[] | null
   tags: string[]
+  pending_topics: string[]
   favorite: boolean
   status: ArticleProcessingStatus
   fetch_status: ArticleProcessingStatus

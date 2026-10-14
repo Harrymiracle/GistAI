@@ -78,3 +78,15 @@ class Article(Base):
         lazy="selectin",
         viewonly=True,
     )
+
+    @property
+    def active_tags(self) -> list[str]:
+        """只返回与文章同属一人的正式主题名称。"""
+
+        return [tag.name for tag in self.tags if tag.user_id == self.user_id and tag.status == "active"]
+
+    @property
+    def pending_topics(self) -> list[str]:
+        """只返回与文章同属一人的待整理主题名称。"""
+
+        return [tag.name for tag in self.tags if tag.user_id == self.user_id and tag.status == "pending"]

@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
+from app.models.tag import Tag
 from app.schemas.common import ApiResponse
-from app.schemas.tag import TagCreate, TagRead, TagUpdate
+from app.schemas.tag import PendingTagRead, PendingTopicSource, TagCreate, TagMergeRequest, TagRead, TagUpdate
 from app.services.tag import TagService
 
 
@@ -13,6 +14,16 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 
 DatabaseSession = Annotated[Session, Depends(get_db)]
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
+
+
+def _tag_read(tag: Tag, article_count: int) -> TagRead:
+    return TagRead(
+        id=tag.id,
+        name=tag.name,
+        created_at=tag.created_at,
+        updated_at=tag.updated_at,
+        article_count=article_count,
+    )
 
 
 @router.get("", response_model=ApiResponse[list[TagRead]])
@@ -24,8 +35,64 @@ def list_tags(
     return ApiResponse(
         code=20000,
         message="Tag 列表查询成功",
-        data=[TagRead.model_validate(tag) for tag in tags],
+        data=[_tag_read(tag, count) for tag, count in tags],
     )
+
+
+@router.get("/pending", response_model=ApiResponse[list[PendingTagRead]])
+def list_pending(
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+) -> ApiResponse[list[PendingTagRead]]:
+    pending = TagService.list_pending(session, user_id)
+    return ApiResponse(
+        code=20000,
+        message="待整理主题列表查询成功",
+        data=[
+            PendingTagRead(
+                id=tag.id,
+                name=tag.name,
+                created_at=tag.created_at,
+                sources=[PendingTopicSource(article_id=article_id, title=title) for article_id, title in sources],
+            )
+            for tag, sources in pending
+        ],
+    )
+
+
+@router.post("/{tag_id}/promote", response_model=ApiResponse[TagRead])
+def promote_pending(
+    tag_id: int,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+) -> ApiResponse[TagRead]:
+    tag = TagService.promote_pending(session, tag_id, user_id)
+    return ApiResponse(
+        code=20000,
+        message="待整理主题已设为正式主题",
+        data=_tag_read(tag, TagService.count_articles(session, tag.id, user_id)),
+    )
+
+
+@router.post("/{tag_id}/merge", response_model=ApiResponse[dict[str, int]])
+def merge_pending(
+    tag_id: int,
+    payload: TagMergeRequest,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+) -> ApiResponse[dict[str, int]]:
+    result = TagService.merge_pending(session, tag_id, payload.target_tag_id, user_id)
+    return ApiResponse(code=20000, message="待整理主题已归入正式主题", data=result)
+
+
+@router.post("/{tag_id}/ignore", response_model=ApiResponse[dict[str, int]])
+def ignore_pending(
+    tag_id: int,
+    session: DatabaseSession,
+    user_id: CurrentUserId,
+) -> ApiResponse[dict[str, int]]:
+    result = TagService.ignore_pending(session, tag_id, user_id)
+    return ApiResponse(code=20000, message="待整理主题已忽略", data=result)
 
 
 @router.post(
@@ -42,7 +109,7 @@ def create_tag(
     return ApiResponse(
         code=20100,
         message="Tag 创建成功",
-        data=TagRead.model_validate(tag),
+        data=_tag_read(tag, 0),
     )
 
 
@@ -57,7 +124,7 @@ def update_tag(
     return ApiResponse(
         code=20000,
         message="Tag 修改成功",
-        data=TagRead.model_validate(tag),
+        data=_tag_read(tag, TagService.count_articles(session, tag.id, user_id)),
     )
 
 

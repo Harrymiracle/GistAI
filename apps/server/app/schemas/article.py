@@ -88,7 +88,8 @@ class ArticleListItem(BaseModel):
     source_type: str
     source_name: str | None
     one_sentence_summary: str | None
-    tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list, validation_alias="active_tags")
+    pending_topics: list[str] = Field(default_factory=list)
     favorite: bool
     status: str
     fetch_status: str
@@ -132,7 +133,8 @@ class ArticleDetail(BaseModel):
     one_sentence_summary: str | None
     detailed_summary: str | None
     key_points: list[str] | None
-    tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list, validation_alias="active_tags")
+    pending_topics: list[str] = Field(default_factory=list)
     favorite: bool
     status: str
     fetch_status: str

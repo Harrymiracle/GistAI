@@ -30,6 +30,7 @@ from app.models.article_chunk import ArticleChunk
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 from app.schemas.article import ArticleCreate, ArticleUpdate, ManualArticleImportRequest
+from app.services.tag import TagService
 
 
 PENDING_STATUS = "pending"
@@ -858,7 +859,14 @@ class ArticleService:
         if source_type is not None:
             filters.append(Article.source_type == source_type)
         if tag_id is not None:
-            filters.append(Article.tags.any(Tag.id == tag_id))
+            TagService.get_active_tag(session, tag_id, user_id)
+            filters.append(
+                Article.tags.any(
+                    (Tag.id == tag_id)
+                    & (Tag.user_id == user_id)
+                    & (Tag.status == "active")
+                )
+            )
 
         total = session.scalar(
             select(func.count()).select_from(Article).where(*filters)

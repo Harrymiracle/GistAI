@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.article_chunk import ArticleChunk
+from app.models.article import Article
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 from app.services.article import ArticleService
@@ -230,3 +231,73 @@ def test_database_error_does_not_expose_traceback(
     }
     assert "private database detail" not in body_text
     assert "Traceback" not in body_text
+
+
+def test_article_list_detail_split_active_and_pending(
+    client: TestClient, db_session: Session
+) -> None:
+    source_type = f"split-{uuid4().hex[:8]}"
+    article = create_article(client, source_type=source_type)
+    active = Tag(user_id=1, name=f"正式-{uuid4()}", status="active")
+    pending = Tag(user_id=1, name=f"待整理-{uuid4()}", status="pending")
+    foreign = Tag(user_id=2, name=f"其他用户-{uuid4()}", status="active")
+    db_session.add_all([active, pending, foreign])
+    db_session.flush()
+    db_session.add_all([
+        ArticleTag(article_id=article["id"], tag_id=active.id),
+        ArticleTag(article_id=article["id"], tag_id=pending.id),
+        ArticleTag(article_id=article["id"], tag_id=foreign.id),
+    ])
+    db_session.commit()
+    db_session.expire_all()
+
+    detail = client.get(f"/api/v1/articles/{article['id']}").json()["data"]
+    listed = client.get("/api/v1/articles", params={"source_type": source_type}).json()["data"]["items"][0]
+    updated = client.patch(f"/api/v1/articles/{article['id']}", json={"favorite": True}).json()["data"]
+
+    for result in (detail, listed, updated):
+        assert active.name in result["tags"]
+        assert pending.name not in result["tags"]
+        assert foreign.name not in result["tags"]
+        assert result["pending_topics"] == [pending.name]
+    assert article["pending_topics"] == []
+
+
+def test_article_filter_rejects_pending_and_other_user(client: TestClient, db_session: Session) -> None:
+    pending = Tag(user_id=1, name=f"待筛选-{uuid4()}", status="pending")
+    foreign = Tag(user_id=2, name=f"外部筛选-{uuid4()}", status="active")
+    db_session.add_all([pending, foreign])
+    db_session.commit()
+
+    for tag_id in (pending.id, foreign.id, 9223372036854775807):
+        response = client.get("/api/v1/articles", params={"tag_id": tag_id})
+        assert response.status_code == 404
+        assert response.json()["code"] == 40402
+
+
+def test_article_filter_active_counts_only_owned_articles(
+    client: TestClient, db_session: Session
+) -> None:
+    active = Tag(user_id=1, name=f"筛选-{uuid4()}", status="active")
+    db_session.add(active)
+    db_session.flush()
+    owned = create_article(client)
+    foreign_article = Article(
+        user_id=2,
+        source_type="web",
+        source_url=f"https://other.example/{uuid4()}",
+        title="其他用户文章",
+    )
+    db_session.add(foreign_article)
+    db_session.flush()
+    db_session.add_all([
+        ArticleTag(article_id=owned["id"], tag_id=active.id),
+        ArticleTag(article_id=foreign_article.id, tag_id=active.id),
+    ])
+    db_session.commit()
+
+    response = client.get("/api/v1/articles", params={"tag_id": active.id})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["total"] == 1
+    assert [item["id"] for item in response.json()["data"]["items"]] == [owned["id"]]

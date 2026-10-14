@@ -116,6 +116,28 @@ class TagAlreadyExistsError(AppError):
         )
 
 
+class TagStatusConflictError(AppError):
+    """Tag 状态不允许当前操作。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            code=40905,
+            message="Tag 状态不允许当前操作",
+        )
+
+
+class TagAssociationConflictError(AppError):
+    """标签存在跨用户文章关联，不能安全删除。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            code=40906,
+            message="Tag 存在异常关联，无法删除",
+        )
+
+
 class SemanticSearchEmbeddingError(AppError):
     """语义搜索生成查询向量失败。"""
 
