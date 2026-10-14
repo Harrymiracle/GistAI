@@ -29,7 +29,7 @@ from app.core.config import Settings
 
 
 VALID_JSON = """{
-  "one_sentence_summary": "文章说明了结构化 AI 输出的重要性。",
+  "one_sentence_summary": "结构化 AI 输出需要基于正文并经过严格校验。",
   "key_points": ["只依据正文", "输出必须校验"],
   "detailed_summary": "文章讨论了如何安全地生成和验证结构化摘要。",
   "tags": ["AI", "结构化输出", "AI"]
@@ -94,7 +94,7 @@ def test_ai_service_builds_guarded_prompt_and_validates_result() -> None:
 
     result = service.generate_article_result("这是待分析的文章正文。")
 
-    assert result.one_sentence_summary == "文章说明了结构化 AI 输出的重要性。"
+    assert result.one_sentence_summary == "结构化 AI 输出需要基于正文并经过严格校验。"
     assert result.key_points == ["只依据正文", "输出必须校验"]
     assert result.tags == ["AI", "结构化输出"]
     assert "只能依据" in llm.system_prompt
@@ -104,6 +104,37 @@ def test_ai_service_builds_guarded_prompt_and_validates_result() -> None:
     assert llm.response_schemas == [None]
     assert llm.purposes == ["article_analysis"]
     assert llm.thinking_overrides == [None]
+
+
+def test_article_summary_prompt_favors_content_over_article_structure() -> None:
+    llm = RawLLMStub(VALID_JSON)
+
+    result = AIService(llm).generate_article_result("待概括的文章正文。")
+
+    prompt = llm.system_prompt
+    assert "one_sentence_summary" in prompt
+    assert "one_sentence_summary、detailed_summary 和 key_points 直接呈现文章内容" in prompt
+    assert "最核心的内容或结论" in prompt
+    assert "快速判断" in prompt
+    assert "不要以文章作为叙述主体" in prompt
+    assert "短摘要第一句必须直接进入主题" in prompt
+    assert "不推荐：“文章通过三种实现方式介绍了 Python 装饰器。”" in prompt
+    assert "推荐：“Python 装饰器能够在不修改原函数的情况下扩展计时、日志和权限校验等功能。”" in prompt
+    assert "detailed_summary" in prompt
+    assert "核心内容、主要理由、关键案例或限定条件" in prompt
+    assert "不按原文的开篇、发展、结尾顺序复述" in prompt
+    for phrase in ("文章通过", "文章介绍了", "文章首先", "接着，文章", "随后，文章", "最后，文章", "本文主要"):
+        assert phrase in prompt
+    assert "作者认为" in prompt and "文中指出" in prompt
+    assert "不能把个人观点、价值判断或有争议的结论改写成已经证实的客观事实" in prompt
+    assert "观点" in prompt and "客观事实" in prompt
+    assert "因果关系" in prompt and "限定条件" in prompt
+    assert "技术文章" in prompt and "叙事文章" in prompt
+    assert prompt.rstrip().splitlines()[-1].startswith("生成前自检：")
+    assert "若摘要仍在描述“文章如何展开”，应改写为“内容本身是什么”" in prompt
+    assert set(result.model_dump()) == {
+        "one_sentence_summary", "key_points", "detailed_summary", "tags"
+    }
 
 
 def test_ai_service_keeps_grounded_answer_on_json_object_path() -> None:

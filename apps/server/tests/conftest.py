@@ -1,6 +1,14 @@
 from collections.abc import Generator
 
 import pytest
+
+from database_guard import configure_pytest_database
+
+try:
+    configure_pytest_database()
+except ValueError as exc:
+    pytest.exit(str(exc), returncode=4)
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 

@@ -95,6 +95,32 @@ def test_ai_success_persists_summaries_key_points_and_tags(
     ) == 2
 
 
+def test_new_article_and_regenerate_ai_use_the_same_summary_prompt(
+    client: TestClient,
+) -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.system_prompts: list[str] = []
+
+        def complete(self, system_prompt: str, _user_prompt: str, **_kwargs: object) -> str:
+            self.system_prompts.append(system_prompt)
+            return ai_result().model_dump_json()
+
+    recording_client = RecordingClient()
+    app.dependency_overrides[get_ai_service] = lambda: AIService(recording_client)
+
+    created = client.post("/api/v1/articles", json=create_payload())
+    assert created.status_code == 201
+    article_id = created.json()["data"]["id"]
+    regenerated = client.post(f"/api/v1/articles/{article_id}/regenerate-ai")
+
+    assert regenerated.status_code == 200
+    assert len(recording_client.system_prompts) == 2
+    assert recording_client.system_prompts[0] == recording_client.system_prompts[1]
+    assert "最核心的内容或结论" in recording_client.system_prompts[0]
+    assert regenerated.json()["data"]["one_sentence_summary"] == ai_result().one_sentence_summary
+
+
 def test_same_user_reuses_existing_tag_without_duplicate(
     client: TestClient,
     db_session: Session,
