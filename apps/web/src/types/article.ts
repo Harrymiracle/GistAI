@@ -13,6 +13,7 @@ export interface ArticleCreateRequest {
 export interface ManualArticleImportRequest {
   source_url: string
   content: string
+  title?: string
 }
 
 export interface ArticleReprocessData {

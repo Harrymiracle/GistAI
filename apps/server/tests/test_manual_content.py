@@ -222,6 +222,65 @@ def test_manual_import_same_url_recovers_original_article(
     assert db_session.scalar(select(Article.id).where(Article.source_url == article.source_url)) == article.id
 
 
+def test_manual_import_saves_optional_title_in_detail_and_list(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+
+    response = client.post(
+        f"/api/v1/articles/{article.id}/manual-import",
+        json={
+            "source_url": article.source_url,
+            "content": MANUAL_CONTENT,
+            "title": "  手动填写的标题  ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["title"] == "手动填写的标题"
+    detail = client.get(f"/api/v1/articles/{article.id}").json()["data"]
+    listed = client.get("/api/v1/articles").json()["data"]["items"]
+    assert detail["title"] == "手动填写的标题"
+    assert next(item for item in listed if item["id"] == article.id)["title"] == "手动填写的标题"
+
+
+def test_manual_import_blank_title_does_not_block_content(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+
+    response = client.post(
+        f"/api/v1/articles/{article.id}/manual-import",
+        json={
+            "source_url": article.source_url,
+            "content": MANUAL_CONTENT,
+            "title": "  \t  ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["title"] is None
+    assert response.json()["data"]["fetch_status"] == "completed"
+
+
+def test_manual_import_rejects_overlong_title_without_saving_content(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+
+    response = client.post(
+        f"/api/v1/articles/{article.id}/manual-import",
+        json={"source_url": article.source_url, "content": MANUAL_CONTENT, "title": "题" * 256},
+    )
+
+    assert response.status_code == 422
+    db_session.refresh(article)
+    assert article.clean_content is None
+
+
 def test_manual_import_changed_url_creates_article_without_changing_original(
     client: TestClient,
     db_session: Session,
@@ -231,18 +290,48 @@ def test_manual_import_changed_url_creates_article_without_changing_original(
 
     response = client.post(
         f"/api/v1/articles/{original.id}/manual-import",
-        json={"source_url": new_url, "content": MANUAL_CONTENT},
+        json={"source_url": new_url, "content": MANUAL_CONTENT, "title": "新链接的手动标题"},
     )
 
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["id"] != original.id
     assert data["source_url"] == new_url
+    assert data["title"] == "新链接的手动标题"
     assert data["status"] == "completed"
     db_session.refresh(original)
     assert original.status == "failed"
     assert original.clean_content is None
     assert original.fetch_error == "普通 HTTP 与 Playwright 均失败"
+    assert original.title is None
+
+
+def test_manual_title_survives_continued_and_regenerated_processing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+    imported = client.post(
+        f"/api/v1/articles/{article.id}/manual-import",
+        json={"source_url": article.source_url, "content": MANUAL_CONTENT, "title": "手动标题"},
+    )
+    assert imported.status_code == 200
+
+    article.status = "partial_failed"
+    article.ai_status = "failed"
+    article.embedding_status = "pending"
+    db_session.commit()
+    continued = client.post(f"/api/v1/articles/{article.id}/reprocess")
+    assert continued.status_code == 200
+    assert continued.json()["data"]["article"]["title"] == "手动标题"
+
+    for endpoint in ("regenerate-ai", "regenerate-embedding"):
+        regenerated = client.post(f"/api/v1/articles/{article.id}/{endpoint}")
+        assert regenerated.status_code == 200
+        assert regenerated.json()["data"]["title"] == "手动标题"
+
+    db_session.refresh(article)
+    assert article.title == "手动标题"
 
 
 def test_manual_import_duplicate_url_returns_existing_id_without_overwriting(

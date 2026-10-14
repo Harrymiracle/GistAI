@@ -161,6 +161,7 @@ class ArticleService:
         user_id: int,
         content: str,
         min_content_chars: int,
+        title: str | None = None,
     ) -> Article:
         """校验完成后原子替换正文，并恢复抓取阶段成功状态。"""
 
@@ -175,6 +176,8 @@ class ArticleService:
             raise ManualContentInvalidError(str(exc)) from exc
 
         content_hash = cls._content_hash(clean_content)
+        if title is not None:
+            article.title = title
         article.clean_content = clean_content
         article.content_hash = content_hash
         article.status = PROCESSING_STATUS
@@ -198,6 +201,7 @@ class ArticleService:
         min_content_chars: int,
         ai_service: ArticleAIProcessor,
         embedding_service: ArticleEmbeddingProcessor,
+        title: str | None = None,
     ) -> Article:
         """保存手动正文后同步进入 AI 与 Embedding 分析。"""
 
@@ -207,6 +211,7 @@ class ArticleService:
             user_id,
             content,
             min_content_chars,
+            title,
         )
         article = cls.process_ai_if_ready(session, article, ai_service)
         return cls.process_embedding_if_ready(session, article, embedding_service)
@@ -257,6 +262,7 @@ class ArticleService:
             min_content_chars,
             ai_service,
             embedding_service,
+            title=payload.title,
         )
 
     @classmethod

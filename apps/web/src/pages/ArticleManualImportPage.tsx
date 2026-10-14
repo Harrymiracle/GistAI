@@ -15,8 +15,13 @@ export function ArticleManualImportPage() {
   })
   const [sourceUrl, setSourceUrl] = useState('')
   const [content, setContent] = useState('')
+  const [title, setTitle] = useState('')
   const manualImport = useMutation({
-    mutationFn: () => importManualArticle(id, { source_url: sourceUrl.trim(), content }),
+    mutationFn: () => importManualArticle(id, {
+      source_url: sourceUrl.trim(),
+      content,
+      title: title.trim() || undefined,
+    }),
     onSuccess: (result) => {
       queryClient.setQueryData(['article', result.id], result)
       void queryClient.invalidateQueries({ queryKey: ['articles'] })
@@ -71,6 +76,17 @@ export function ArticleManualImportPage() {
                 onChange={(event) => { setSourceUrl(event.target.value); manualImport.reset() }}
               />
               <p className="mt-2 break-all rounded-lg bg-blue-50 p-3 text-sm text-blue-900">本次正文将归属于：{sourceUrl.trim() || '请填写文章链接'}</p>
+              <label className="mt-6 block text-sm font-medium" htmlFor="manual-article-title">文章标题（可选）</label>
+              <input
+                id="manual-article-title"
+                className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none focus:border-blue-500"
+                type="text"
+                maxLength={255}
+                value={title}
+                disabled={manualImport.isPending}
+                onChange={(event) => { setTitle(event.target.value); manualImport.reset() }}
+              />
+              <p className="mt-2 text-xs text-slate-500">最多 255 个字符，留空也可导入；保存后可在文章详情中修改。</p>
               <label className="mt-6 block text-sm font-medium" htmlFor="manual-article-content">文章正文</label>
               <textarea
                 id="manual-article-content"

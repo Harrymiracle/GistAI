@@ -24,6 +24,10 @@ OptionalTitle = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+EditableTitle = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+]
 
 
 class ArticleCreate(BaseModel):
@@ -41,7 +45,7 @@ class ArticleCreate(BaseModel):
 class ArticleUpdate(BaseModel):
     """允许用户修改的 Article 字段。"""
 
-    title: OptionalTitle | None = None
+    title: EditableTitle | None = None
     source_name: OptionalName | None = None
     author: OptionalName | None = None
     published_at: datetime | None = None
@@ -65,6 +69,12 @@ class ManualArticleImportRequest(BaseModel):
 
     source_url: HttpUrl
     content: str = Field(min_length=1)
+    title: EditableTitle | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_blank_title(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 class ArticleListItem(BaseModel):

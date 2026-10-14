@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { getArticle, getArticleRequestErrorMessage, reprocessArticle } from '@/api/articles'
+import { getArticle, getArticleRequestErrorMessage, reprocessArticle, updateArticleTitle } from '@/api/articles'
 import { ArticleStatusBadge } from '@/components/articles/ArticleStatusBadge'
 import type { ArticleDetail } from '@/types/article'
 
@@ -37,6 +38,60 @@ function ProcessingStages({ article }: { article: ArticleDetail }) {
         ))}
       </ul>
     </section>
+  )
+}
+
+function ArticleTitleEditor({ article, disabled }: { article: ArticleDetail; disabled: boolean }) {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(article.title ?? '')
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const updateTitle = useMutation({
+    mutationFn: (title: string) => updateArticleTitle(article.id, title),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['article', article.id], result)
+      void queryClient.invalidateQueries({ queryKey: ['articles'] })
+      setDraft(result.title ?? '')
+      setEditing(false)
+      setValidationError(null)
+    },
+  })
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const title = draft.trim()
+    if (!title) {
+      setValidationError('请输入文章标题。')
+      return
+    }
+    updateTitle.mutate(title)
+  }
+
+  return (
+    <div className="min-w-0 flex-1">
+      <h1 className="break-words text-2xl font-semibold sm:text-3xl">{article.title?.trim() || article.source_url}</h1>
+      {editing ? (
+        <form className="mt-4" onSubmit={submit}>
+          <label className="block text-sm font-medium" htmlFor="article-title-edit">文章标题</label>
+          <input
+            id="article-title-edit"
+            className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+            type="text"
+            maxLength={255}
+            value={draft}
+            disabled={updateTitle.isPending}
+            onChange={(event) => { setDraft(event.target.value); setValidationError(null); updateTitle.reset() }}
+          />
+          {validationError ? <p className="mt-2 text-sm text-red-700" role="alert">{validationError}</p> : null}
+          {updateTitle.isError ? <p className="mt-2 text-sm text-red-700" role="alert">标题保存失败：{getArticleRequestErrorMessage(updateTitle.error)}</p> : null}
+          <div className="mt-3 flex gap-3 text-sm">
+            <button className="rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed" type="submit" disabled={updateTitle.isPending}>保存标题</button>
+            <button className="text-slate-600 underline disabled:cursor-not-allowed" type="button" disabled={updateTitle.isPending} onClick={() => { setDraft(article.title ?? ''); setValidationError(null); updateTitle.reset(); setEditing(false) }}>取消</button>
+          </div>
+        </form>
+      ) : (
+        <button className="mt-3 text-sm font-medium text-blue-700 underline disabled:cursor-not-allowed" type="button" disabled={disabled} onClick={() => { setDraft(article.title ?? ''); setEditing(true) }}>编辑标题</button>
+      )}
+    </div>
   )
 }
 
@@ -107,7 +162,7 @@ export function ArticleDetailPage() {
           <>
             <header className="mt-7 rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <h1 className="min-w-0 flex-1 break-words text-2xl font-semibold sm:text-3xl">{article.data.title?.trim() || article.data.source_url}</h1>
+                <ArticleTitleEditor article={article.data} disabled={reprocess.isPending} />
                 <ArticleStatusBadge status={article.data.status} />
               </div>
               <div className="mt-5 space-y-2 text-sm text-slate-600">

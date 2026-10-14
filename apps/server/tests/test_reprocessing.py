@@ -197,6 +197,7 @@ def test_reprocess_success_atomically_replaces_complete_pipeline(
     assert data["content_unchanged"] is False
     result = data["article"]
     assert result["id"] == original_id
+    assert result["title"] == "用户保留的标题"
     assert result["clean_content"] == NEW_CONTENT
     assert result["content_hash"] == hashlib.sha256(NEW_CONTENT.encode()).hexdigest()
     assert result["one_sentence_summary"] == "新的摘要"

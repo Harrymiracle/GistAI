@@ -26,6 +26,11 @@ export async function getArticle(id: number): Promise<ArticleDetail> {
   return response.data.data
 }
 
+export async function updateArticleTitle(id: number, title: string): Promise<ArticleDetail> {
+  const response = await apiClient.patch<ApiResponse<ArticleDetail>>(`/articles/${id}`, { title })
+  return response.data.data
+}
+
 export async function reprocessArticle(id: number): Promise<ArticleReprocessData> {
   const response = await apiClient.post<ApiResponse<ArticleReprocessData>>(`/articles/${id}/reprocess`)
   return response.data.data

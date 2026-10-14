@@ -123,6 +123,38 @@ def test_patch_and_patch_404(client: TestClient) -> None:
     assert missing.status_code == 404
 
 
+def test_patch_title_updates_existing_url_like_title_in_detail_and_list(client: TestClient) -> None:
+    article = create_article(client, title="/articles/old-path")
+
+    response = client.patch(
+        f"/api/v1/articles/{article['id']}",
+        json={"title": "  新的文章标题  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["title"] == "新的文章标题"
+    detail = client.get(f"/api/v1/articles/{article['id']}").json()["data"]
+    listed = client.get("/api/v1/articles").json()["data"]["items"]
+    assert detail["title"] == "新的文章标题"
+    assert next(item for item in listed if item["id"] == article["id"])["title"] == "新的文章标题"
+
+
+def test_patch_title_rejects_blank_and_overlong_values(client: TestClient) -> None:
+    article = create_article(client)
+
+    for title in ("  ", "题" * 256):
+        response = client.patch(f"/api/v1/articles/{article['id']}", json={"title": title})
+        assert response.status_code == 422
+
+    assert client.get(f"/api/v1/articles/{article['id']}").json()["data"]["title"] == "测试文章"
+
+
+def test_automatic_fetch_uses_extracted_title_when_none_provided(client: TestClient) -> None:
+    article = create_article(client, title=None)
+
+    assert article["title"] == "抓取标题"
+
+
 def test_status_and_status_404(client: TestClient) -> None:
     article = create_article(client)
 
