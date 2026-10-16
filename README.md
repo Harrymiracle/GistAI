@@ -33,8 +33,9 @@ GistAI 可以把网页文章抓取、清洗、摘要并写入个人知识库，�
 
 - URL 导入文章
 - HTTP 抓取 + Playwright fallback
-- 正文提取与清洗
-- AI 摘要、核心观点与标签
+- 正文提取与清洗；抓取失败后可手动粘贴正文并继续 AI / Embedding 处理
+- 文章列表与详情、分页跳转、按主题筛选、标题编辑与无标题时的 URL 回退展示
+- AI 摘要、核心观点与主题；正式主题和待整理主题可分别管理，一篇文章可关联多个主题
 - Token Chunking + Embedding
 - PostgreSQL + pgvector
 - Keyword Search / Semantic Search
@@ -47,7 +48,10 @@ GistAI 可以把网页文章抓取、清洗、摘要并写入个人知识库，�
 - Evidence Selection
 - Runtime Policy / Tool Budget
 - PostgreSQL Conversation Checkpoint
+- 问候、感谢、告别和受控句式会话状态问题的本地快速回答
 - KB / Web Sources 展示
+
+摘要直接呈现内容与关键依据，避免机械复述文章结构；待整理主题可在管理页提升为正式主题、归入已有主题或忽略。
 
 ---
 
@@ -74,6 +78,8 @@ flowchart LR
 
     subgraph AGENT[Agentic RAG]
         Q[User Question]
+        FAST[Local Fast Path]
+        INIT[Initial Decision]
         CTX[Query Contextualization]
         KB[Knowledge Search]
         DEC[Evidence Evaluation]
@@ -101,7 +107,10 @@ flowchart LR
     CHUNK -.-> LLM
 
     API --> Q
-    Q --> CTX
+    Q --> FAST
+    FAST -->|local answer| API
+    FAST -->|other question| INIT
+    INIT --> CTX
     CTX --> KB
     KB --> DB
     KB --> DEC
@@ -123,7 +132,7 @@ flowchart LR
     API --> FE
 ```
 
-程序负责权限、工具预算、合法 Action 和终止条件；LLM 只在允许范围内做语义判断。
+程序负责本地快速路径、权限、工具预算、合法 Action 和终止条件；LLM 只在允许范围内做语义判断。
 
 ---
 
@@ -154,8 +163,7 @@ flowchart LR
 ### AI & Retrieval
 
 - OpenAI-compatible LLM API
-- Qwen 系列模型
-- `text-embedding-v4`
+- OpenAI-compatible Embedding API
 - Semantic Search
 - Structured Output
 - Query Rewrite
@@ -189,40 +197,34 @@ GistAI/
 
 ## Quick Start
 
-以下命令以 Windows PowerShell 为例。
+以下命令以 Windows PowerShell 为例，从项目根目录开始。需要 Python、Node.js / npm 和 Docker Desktop；各项外部服务参数见 `.env.example`。
 
-### 1. Start PostgreSQL
+### 1. Configure & Start PostgreSQL
 
 在项目根目录执行：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`.env.example` 的本地数据库连接与 `docker-compose.yml` 的默认配置一致。先在本机 `.env` 中填写所需的 LLM、Embedding 和 Web Search 服务配置，再启动数据库：
 
 ```powershell
 docker compose up -d postgres
 docker compose ps
 ```
 
-正常情况下可以看到：
+确认 `gistai-postgres` 健康检查通过。不要提交 `.env` 或真实密钥。
 
-```text
-gistai-postgres
-healthy
-```
-
-本地数据库默认配置：
-
-```text
-Host:     localhost
-Port:     5432
-Database: gistai
-Username: gistai
-Password: gistai
-```
-
-### 2. Run Database Migration
+### 2. Install Backend & Run Database Migration
 
 ```powershell
-cd apps/server
+Set-Location apps/server
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+.\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m alembic current
 ```
 
 ### 3. Start Backend
@@ -241,17 +243,21 @@ http://127.0.0.1:8000/docs
 
 ### 4. Start Frontend
 
-回到项目根目录：
+另开一个 PowerShell 窗口，在项目根目录执行：
 
 ```powershell
-npm run dev:web
+Set-Location apps/web
+npm install --registry=https://registry.npmmirror.com
+npm run dev
 ```
 
 访问：
 
 ```text
-http://localhost:8088/
+http://127.0.0.1:8088/
 ```
+
+默认端口为前端 `8088`、后端 `8000`、PostgreSQL `5432`。前后端可在各自终端按 `Ctrl+C` 停止；数据库可从项目根目录执行 `docker compose stop postgres`。
 
 ---
 
@@ -296,6 +302,8 @@ Answer
 > Retrieval Success ≠ User Goal Satisfied
 
 如果当前 Chunk 或 Search Snippet 不足以回答问题，Agent 可以继续执行 Query Rewrite、全文读取或 Web Search。
+
+问候、感谢、告别、身份询问，以及会话是否延续、是否是新对话和先前聊天是否保留等受控完整句式，会在知识检索前本地回答。该路径根据当前用户 checkpoint 中已有的真实消息判断会话状态，不调用模型、Embedding、知识检索或 Web Search；普通知识问题仍由 Agent 处理。前端在页面切换和刷新后保留当前会话及 `thread_id`，服务端按用户隔离 checkpoint。
 
 ### Controlled Web Search
 
@@ -368,14 +376,18 @@ Request:
 }
 ```
 
-Response:
+Response（`data` 为实际回答）：
 
 ```json
 {
-  "thread_id": "UUID",
-  "answer": "回答内容",
-  "status": "answer | partial | insufficient | error",
-  "sources": []
+  "code": 20000,
+  "message": "Agent 回答成功",
+  "data": {
+    "thread_id": "UUID",
+    "answer": "回答内容",
+    "status": "answer",
+    "sources": []
+  }
 }
 ```
 
@@ -385,22 +397,7 @@ Response:
 
 ## Tests
 
-最近一次完整验证结果：
-
-```text
-Agent tests:                116 passed
-Agent API tests:              6 passed
-Checkpoint integration:       5 passed
-Semantic / RAG / Fetch:      69 passed
-Full backend:               308 passed
-
-Frontend production build: passed
-Python compileall:          passed
-pip check:                  passed
-git diff --check:           passed
-```
-
-实际验证覆盖过：
+后端测试覆盖：
 
 - KB Search → Answer
 - KB Search → Full-text → Answer
@@ -410,6 +407,9 @@ git diff --check:           passed
 - Web Search → Web Full-text → Answer
 - Article Import → Embedding → Agent Retrieval
 - PostgreSQL Checkpoint 跨实例恢复
+- 会话状态快速路径及非会话问题的反向保护
+
+运行后端测试需要独立的测试数据库。前端可在 `apps/web` 目录执行 `npm run build` 检查生产构建。
 
 ---
 
@@ -422,6 +422,7 @@ git diff --check:           passed
 - Long-term Memory
 - Cross-conversation Memory
 - Conversation History / Rename / Delete UI
+- 历史对话内容自动总结
 - Streaming / SSE / WebSocket Chat
 - Multi-Agent
 - Planner / Reflection
@@ -430,21 +431,3 @@ git diff --check:           passed
 - Agent Analytics Dashboard
 
 这些能力会根据后续真实产品需求决定是否加入。
-
----
-
-## Status
-
-```text
-Knowledge Ingestion        ✅
-Keyword / Semantic Search  ✅
-Basic RAG                  ✅
-Agentic RAG                ✅
-Controlled Web Search      ✅
-Full-text Reading          ✅
-Runtime Policy / Budget    ✅
-PostgreSQL Checkpoint      ✅
-Agent HTTP API             ✅
-Frontend Chat              ✅
-Core Behavior Validation   ✅
-```
