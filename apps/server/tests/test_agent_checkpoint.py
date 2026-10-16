@@ -1,14 +1,11 @@
-from collections.abc import Generator, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
 import logging
 from uuid import UUID, uuid4
 
-import psycopg
 import pytest
 from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from sqlalchemy.engine import make_url
 
@@ -137,34 +134,11 @@ def _serializer_from_checkpointer(monkeypatch) -> JsonPlusSerializer:
 
 
 @pytest.fixture
-def checkpoint_connection_string() -> Generator[str, None, None]:
-    base_connection_string = to_psycopg_connection_string(settings.database_url)
-    connection_options = conninfo_to_dict(base_connection_string)
-    assert connection_options.get("host") in {
-        "localhost",
-        "127.0.0.1",
-    }
-    test_database = f"gistai_checkpoint_test_{uuid4().hex}"
-    admin_options = {**connection_options, "dbname": "postgres"}
-    with psycopg.connect(**admin_options, autocommit=True) as connection:
-        connection.execute(
-            sql.SQL("CREATE DATABASE {}").format(sql.Identifier(test_database))
-        )
-    test_url = make_url(settings.database_url).set(database=test_database)
-    try:
-        yield to_psycopg_connection_string(
-            test_url.render_as_string(hide_password=False)
-        )
-    finally:
-        with psycopg.connect(**admin_options, autocommit=True) as connection:
-            connection.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND pid <> pg_backend_pid()",
-                (test_database,),
-            )
-            connection.execute(
-                sql.SQL("DROP DATABASE {}").format(sql.Identifier(test_database))
-            )
+def checkpoint_connection_string() -> str:
+    """仅在已配置的 gistai_test 中验证 PostgreSQL checkpoint。"""
+
+    assert make_url(settings.database_url).database == "gistai_test"
+    return to_psycopg_connection_string(settings.database_url)
 
 
 def test_sqlalchemy_postgres_url_is_converted_for_psycopg() -> None:

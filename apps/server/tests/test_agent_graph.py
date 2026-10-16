@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 import app.agent.graph as graph_module
+from app.agent.chat import AgentChatService
 from app.agent.context import AgentContext
 from app.agent.graph import create_agent_graph
 from app.agent.nodes import initialize
@@ -189,6 +190,178 @@ def fast_path_context() -> AgentContext:
         web_page_fetch=dependency,  # type: ignore[arg-type]
         fulltext_selector=dependency,  # type: ignore[arg-type]
     )
+
+
+def test_session_status_follow_up_uses_local_answer_without_runtime_dependencies() -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    thread_id = uuid4()
+    context = fast_path_context()
+    service.chat("你好", thread_id, user_id=41, context=context)
+
+    response = service.chat(
+        "你好，我现在还在上面的聊天上吗？",
+        thread_id,
+        user_id=41,
+        context=context,
+    )
+
+    assert response.answer == "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"
+    assert response.status == "answer"
+    assert response.sources == []
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_answer"),
+    [
+        ("还在原对话中吗？", "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("这是新对话吗？", "不是，这是已有对话的延续，前面的聊天内容还在。"),
+    ],
+)
+def test_session_status_missing_variants_use_local_answer(
+    message: str,
+    expected_answer: str,
+) -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    thread_id = uuid4()
+    context = fast_path_context()
+    service.chat("你好", thread_id, user_id=41, context=context)
+
+    response = service.chat(message, thread_id, user_id=41, context=context)
+
+    assert response.answer == expected_answer
+    assert response.status == "answer"
+    assert response.sources == []
+
+
+@pytest.mark.parametrize(
+    ("message", "has_history", "expected_answer"),
+    [
+        ("你好，我现在还在上面的聊天上吗？", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("我还在刚才的聊天里吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("我们还在刚才的对话吗?", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("您好， 我现在还在上面的聊天吗 ？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("请问，还是刚才那个聊天吗？", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("这是新的对话吗？", True, "不是，这是已有对话的延续，前面的聊天内容还在。"),
+        ("这是新的对话吗？", False, "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("这是新聊天吗?", True, "不是，这是已有对话的延续，前面的聊天内容还在。"),
+        ("我是不是开了一个新会话？", False, "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("你还记得我们刚才说的吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("你还记得我们刚才说的吗？", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("请问 你还记得前面的聊天吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("前面的聊天还在吗。", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("还在原来的对话中吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("还在原对话中吗？", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("我还在之前的聊天里吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("现在还是刚才那个聊天吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("这是新对话吗？", False, "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("这是新的聊天吗？", True, "不是，这是已有对话的延续，前面的聊天内容还在。"),
+        ("这是一个新会话吗？", False, "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("之前的对话还在吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("你好，这是新对话吗？", True, "不是，这是已有对话的延续，前面的聊天内容还在。"),
+        ("您好，还在原对话中吗？", True, "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"),
+        ("嗨， 还在 原 对话 中 吗 ?", False, "这是当前对话的第一条消息，还没有之前的聊天内容。"),
+        ("请问，这是一个新的聊天吗。", True, "不是，这是已有对话的延续，前面的聊天内容还在。"),
+    ],
+)
+def test_session_status_variants_use_checkpoint_history(
+    message: str,
+    has_history: bool,
+    expected_answer: str,
+) -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    thread_id = uuid4()
+    context = fast_path_context()
+    if has_history:
+        service.chat("你好", thread_id, user_id=41, context=context)
+
+    response = service.chat(message, thread_id, user_id=41, context=context)
+    checkpoint = graph.get_state(
+        {"configurable": {"thread_id": f"41:{thread_id}"}}
+    ).values
+
+    assert response.answer == expected_answer
+    assert response.status == "answer"
+    assert response.sources == []
+    assert checkpoint["messages"][-2].content == message
+    assert checkpoint["messages"][-1].content == expected_answer
+    assert checkpoint["tool_call_counts"] == {}
+
+
+def test_session_status_does_not_share_history_between_users() -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    thread_id = uuid4()
+    context = fast_path_context()
+    service.chat("你好", thread_id, user_id=41, context=context)
+
+    response = service.chat(
+        "这是新的对话吗？", thread_id, user_id=42, context=context
+    )
+
+    assert response.answer == "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"
+    assert len(graph.get_state(
+        {"configurable": {"thread_id": f"42:{thread_id}"}}
+    ).values["messages"]) == 2
+
+
+def test_session_status_first_request_without_thread_id_creates_checkpoint() -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    response = service.chat(
+        "这是新的对话吗？", None, user_id=41, context=fast_path_context()
+    )
+
+    assert response.answer == "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"
+    assert response.status == "answer"
+    assert len(graph.get_state(
+        {"configurable": {"thread_id": f"41:{response.thread_id}"}}
+    ).values["messages"]) == 2
+
+
+def test_session_status_answer_is_available_to_next_turn() -> None:
+    graph = create_agent_graph(InMemorySaver())
+    service = AgentChatService(graph)
+    thread_id = uuid4()
+    context = fast_path_context()
+    first = service.chat("这是新的对话吗？", thread_id, user_id=41, context=context)
+
+    second = service.chat("我还在刚才的聊天里吗？", thread_id, user_id=41, context=context)
+
+    assert first.answer == "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"
+    assert second.answer == "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"
+    assert len(graph.get_state(
+        {"configurable": {"thread_id": f"41:{thread_id}"}}
+    ).values["messages"]) == 4
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "你好，帮我总结这篇文章",
+        "人工智能是什么",
+        "刚才提到的 Transformer 是什么",
+        "我们刚才聊了什么",
+        "帮我总结一下刚才的聊天",
+        "你好，现在帮我查一下人工智能是什么",
+        "前面的聊天还在吗？另外解释一下 Transformer",
+        "你好，人工智能是什么",
+        "帮我总结刚才的聊天",
+        "请问现在的人工智能发展到什么阶段了",
+        "原对话中提到的 Python 装饰器是什么",
+    ],
+)
+def test_session_status_does_not_capture_real_tasks(message: str) -> None:
+    graph = create_agent_graph(InMemorySaver())
+    result = graph.invoke(
+        {"messages": [{"role": "user", "content": message}]},
+        config={"configurable": {"thread_id": str(uuid4())}},
+        context=empty_search_context(),
+    )
+
+    assert result["tool_call_counts"] == {"knowledge_search": 1}
 
 
 @pytest.mark.parametrize(

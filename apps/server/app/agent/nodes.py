@@ -1,4 +1,5 @@
 import logging
+import re
 from collections.abc import Sequence
 from typing import Literal
 
@@ -77,6 +78,35 @@ _FAST_PATH_SPACED_ENGLISH_INPUTS = frozenset(
     {"hi", "hello", "thanks", "bye", "goodbye"}
 )
 _FAST_PATH_SPACED_ENGLISH_MAX_LENGTH = 20
+_SESSION_STATUS_PREFIXES = ("你好", "您好", "嗨", "请问")
+_SESSION_STATUS_PUNCTUATION = "！!。.？?，,、"
+_SESSION_CONTINUATION_PATTERNS = (
+    re.compile(
+        r"(?:我|我们)?(?:现在)?(?:还|仍然)在"
+        r"(?:原来?|之前|刚才|上面|当前)(?:的)?"
+        r"(?:聊天|对话|会话)(?:中|里|上)?吗"
+    ),
+    re.compile(
+        r"(?:我|我们)?(?:现在)?还是"
+        r"(?:原来?|之前|刚才|上面|当前)(?:的)?(?:那个)?"
+        r"(?:聊天|对话|会话)吗"
+    ),
+)
+_SESSION_NEW_CHAT_PATTERNS = (
+    re.compile(r"这是(?:一个)?新(?:的)?(?:聊天|对话|会话)吗"),
+    re.compile(r"(?:我)?是不是开了(?:一个)?新(?:的)?(?:聊天|对话|会话)(?:吗)?"),
+)
+_SESSION_MEMORY_PATTERNS = (
+    re.compile(r"(?:前面|之前)(?:的)?(?:聊天|对话|会话)还在吗"),
+    re.compile(
+        r"你还记得(?:我们(?:刚才|之前)说的|(?:前面|之前)(?:的)?"
+        r"(?:聊天|对话|会话))吗"
+    ),
+)
+_SESSION_CONTINUED_ANSWER = "是的，你还在当前对话中，前面的聊天内容还在，我们可以接着聊。"
+_SESSION_FIRST_MESSAGE_ANSWER = "这是当前对话的第一条消息，还没有之前的聊天内容。"
+_SESSION_NOT_NEW_ANSWER = "不是，这是已有对话的延续，前面的聊天内容还在。"
+_SESSION_NEW_ANSWER = "是的，这是当前对话的第一条消息，还没有之前的聊天内容。"
 
 # TODO(低优先级): 复杂混合表达和特殊格式仅在真实使用中高频出现时再增强。
 
@@ -135,6 +165,8 @@ def non_knowledge_fast_path_check(state: AgentState) -> dict[str, object]:
 
     answer = _match_fast_path_answer(state["original_query"])
     if answer is None:
+        answer = _match_session_status_answer(state)
+    if answer is None:
         return {}
 
     return {
@@ -176,6 +208,38 @@ def _find_exact_fast_path_answer(normalized: str) -> str | None:
         if normalized in exact_inputs:
             return answer
     return None
+
+
+def _match_session_status_answer(state: AgentState) -> str | None:
+    """仅对完整匹配的会话状态问句，根据已恢复的历史回答。"""
+
+    query = re.sub(r"\s+", "", state["original_query"]).lower()
+    query = query.strip(_SESSION_STATUS_PUNCTUATION)
+    for _ in range(2):
+        prefix = next(
+            (item for item in _SESSION_STATUS_PREFIXES if query.startswith(item)),
+            None,
+        )
+        if prefix is None:
+            break
+        query = query[len(prefix):].lstrip(_SESSION_STATUS_PUNCTUATION)
+
+    is_continuation_question = any(
+        pattern.fullmatch(query) for pattern in _SESSION_CONTINUATION_PATTERNS
+    )
+    is_memory_question = any(
+        pattern.fullmatch(query) for pattern in _SESSION_MEMORY_PATTERNS
+    )
+    is_new_chat_question = any(
+        pattern.fullmatch(query) for pattern in _SESSION_NEW_CHAT_PATTERNS
+    )
+    if not (is_continuation_question or is_memory_question or is_new_chat_question):
+        return None
+
+    has_history = bool(_prior_conversation(state["messages"]))
+    if is_continuation_question or is_memory_question:
+        return _SESSION_CONTINUED_ANSWER if has_history else _SESSION_FIRST_MESSAGE_ANSWER
+    return _SESSION_NOT_NEW_ANSWER if has_history else _SESSION_NEW_ANSWER
 
 
 def _collapse_spaced_english_fast_path_input(value: str) -> str | None:

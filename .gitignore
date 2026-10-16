@@ -25,3 +25,6 @@ Thumbs.db
 
 # 本地日志
 *.log
+
+# 私有历史标签治理运行产物
+/docs/private/runtime/tag-governance/
