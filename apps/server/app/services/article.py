@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.ai.errors import AIError
-from app.ai.schemas import AIArticleResult
+from app.ai.schemas import AIArticleSummaryResult, AIArticleTopicResult
 from app.ai.service import ArticleAIProcessor
 from app.core.exceptions import (
     ArticleAlreadyExistsError,
@@ -27,9 +27,9 @@ from app.embedding.schemas import EmbeddedChunk
 from app.embedding.service import ArticleEmbeddingProcessor
 from app.models.article import Article
 from app.models.article_chunk import ArticleChunk
-from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 from app.schemas.article import ArticleCreate, ArticleUpdate, ManualArticleImportRequest
+from app.services.article_topic import ArticleTopicService
 from app.services.tag import TagService
 
 
@@ -151,7 +151,7 @@ class ArticleService:
         """同步执行创建、正文获取、AI 分析和 Embedding 主链路。"""
 
         article = cls.create_and_fetch(session, payload, user_id, crawler)
-        article = cls.process_ai_if_ready(session, article, ai_service)
+        article = cls.process_ai_if_ready(session, article, user_id, ai_service)
         return cls.process_embedding_if_ready(session, article, embedding_service)
 
     @classmethod
@@ -214,7 +214,7 @@ class ArticleService:
             min_content_chars,
             title,
         )
-        article = cls.process_ai_if_ready(session, article, ai_service)
+        article = cls.process_ai_if_ready(session, article, user_id, ai_service)
         return cls.process_embedding_if_ready(session, article, embedding_service)
 
     @classmethod
@@ -271,6 +271,7 @@ class ArticleService:
         cls,
         session: Session,
         article: Article,
+        user_id: int,
         ai_service: ArticleAIProcessor,
     ) -> Article:
         """仅对已获得有效正文的 Article 执行 AI，并安全持久化状态。"""
@@ -284,36 +285,87 @@ class ArticleService:
         cls._commit(session)
 
         try:
-            result = ai_service.generate_article_result(article.clean_content)
+            active_topic_names = ArticleTopicService.list_active_names(session, user_id)
+            result = ai_service.generate_article_summary_with_topics(
+                article.clean_content,
+                active_topic_names,
+            )
+        except SQLAlchemyError:
+            logger.exception("Article %s AI 主题清单读取失败", article.id)
+            session.rollback()
+            session.refresh(article)
+            cls._mark_ai_failed(session, article, "AI 结果保存失败")
         except AIError as exc:
             cls._mark_ai_failed(session, article, str(exc))
         except Exception:
             logger.exception("Article %s AI 处理发生未预期异常", article.id)
             cls._mark_ai_failed(session, article, "AI 处理失败")
         else:
-            cls._apply_ai_result(session, article, result)
+            try:
+                cls._apply_ai_topic_result(session, article, user_id, result)
+            except SQLAlchemyError:
+                logger.exception("Article %s AI 结果保存失败", article.id)
+                session.refresh(article)
+                cls._mark_ai_failed(session, article, "AI 结果保存失败")
 
         session.refresh(article)
         return article
 
-    @classmethod
-    def _apply_ai_result(
-        cls,
-        session: Session,
+    @staticmethod
+    def _assign_ai_summary(
         article: Article,
-        result: AIArticleResult,
+        result: AIArticleSummaryResult,
     ) -> None:
+        """只把可信摘要字段写入文章对象。"""
+
         article.one_sentence_summary = result.one_sentence_summary
         article.key_points = result.key_points
         article.detailed_summary = result.detailed_summary
-        article.ai_status = COMPLETED_STATUS
-        article.ai_error = None
-        article.embedding_status = PENDING_STATUS
-        article.embedding_error = None
-        article.status = PROCESSING_STATUS
-        cls._replace_ai_tags(session, article, result.tags)
-        cls._commit(session)
-        session.expire(article, ["tags"])
+
+    @classmethod
+    def _apply_ai_topic_result(
+        cls,
+        session: Session,
+        article: Article,
+        user_id: int,
+        result: AIArticleTopicResult,
+    ) -> None:
+        """在同一事务中保存摘要、主题关联与 AI 阶段状态。"""
+
+        try:
+            owned_article = ArticleTopicService.get_owned_article_for_update(
+                session,
+                article.id,
+                user_id,
+            )
+            old_pending_ids = ArticleTopicService.list_pending_tag_ids(
+                session,
+                owned_article.id,
+                user_id,
+            )
+            plan = ArticleTopicService.resolve_for_save(
+                session,
+                user_id,
+                result,
+                old_pending_ids,
+            )
+            ArticleTopicService.replace_article_topics(
+                session,
+                user_id,
+                owned_article,
+                plan,
+            )
+            cls._assign_ai_summary(owned_article, result)
+            owned_article.ai_status = COMPLETED_STATUS
+            owned_article.ai_error = None
+            owned_article.embedding_status = PENDING_STATUS
+            owned_article.embedding_error = None
+            owned_article.status = PROCESSING_STATUS
+            session.expire(owned_article, ["tags"])
+            cls._commit(session)
+        except Exception:
+            session.rollback()
+            raise
 
     @classmethod
     def _mark_ai_failed(
@@ -391,7 +443,7 @@ class ArticleService:
             )
         ):
             if article.ai_status != COMPLETED_STATUS:
-                article = cls.process_ai_if_ready(session, article, ai_service)
+                article = cls.process_ai_if_ready(session, article, user_id, ai_service)
             if (
                 article.ai_status == COMPLETED_STATUS
                 and article.embedding_status != COMPLETED_STATUS
@@ -435,7 +487,17 @@ class ArticleService:
         cls._commit(session)
 
         try:
-            ai_result = ai_service.generate_article_result(extracted.clean_content)
+            active_topic_names = ArticleTopicService.list_active_names(session, user_id)
+            ai_result = ai_service.generate_article_summary_with_topics(
+                extracted.clean_content,
+                active_topic_names,
+            )
+        except SQLAlchemyError:
+            logger.exception("Article %s 重处理主题清单读取失败", article.id)
+            session.rollback()
+            session.refresh(article)
+            cls._finish_reprocess_ai_failure(session, article, "AI 重新处理失败")
+            return cls._refresh(session, article), False
         except AIError as exc:
             cls._finish_reprocess_ai_failure(session, article, str(exc))
             return cls._refresh(session, article), False
@@ -481,6 +543,7 @@ class ArticleService:
                 article,
                 extracted,
                 new_hash,
+                user_id,
                 ai_result,
                 chunks,
             )
@@ -505,7 +568,7 @@ class ArticleService:
         min_content_chars: int,
         ai_service: ArticleAIProcessor,
     ) -> Article:
-        """基于当前正文原子替换 AI 字段与标签，不触碰 Embedding。"""
+        """基于当前正文原子替换摘要字段，保留主题与 Embedding。"""
 
         article = cls._get_article_for_update(session, article_id, user_id)
         cls._ensure_not_processing(article)
@@ -516,7 +579,7 @@ class ArticleService:
         cls._commit(session)
 
         try:
-            result = ai_service.generate_article_result(clean_content)
+            result = ai_service.generate_article_summary(clean_content)
         except AIError as exc:
             cls._finish_regenerated_ai_failure(session, article, str(exc))
         except Exception:
@@ -619,17 +682,15 @@ class ArticleService:
         cls,
         session: Session,
         article: Article,
-        result: AIArticleResult,
+        result: AIArticleSummaryResult,
     ) -> None:
         article.one_sentence_summary = result.one_sentence_summary
         article.key_points = result.key_points
         article.detailed_summary = result.detailed_summary
         article.ai_status = COMPLETED_STATUS
         article.ai_error = None
-        cls._replace_ai_tags(session, article, result.tags)
         article.status = cls._calculate_overall_status(article)
         cls._commit(session)
-        session.expire(article, ["tags"])
 
     @classmethod
     def _apply_complete_reprocess(
@@ -638,46 +699,72 @@ class ArticleService:
         article: Article,
         extracted: ExtractedArticle,
         new_hash: str,
-        ai_result: AIArticleResult,
+        user_id: int,
+        ai_result: AIArticleTopicResult,
         chunks: list[EmbeddedChunk],
     ) -> None:
-        article.clean_content = extracted.clean_content
-        article.content_hash = new_hash
-        if article.title is None:
-            article.title = extracted.title
-        if article.author is None:
-            article.author = extracted.author
-        if article.published_at is None:
-            article.published_at = extracted.published_at
-        if article.source_name is None:
-            article.source_name = extracted.source_name
-        article.one_sentence_summary = ai_result.one_sentence_summary
-        article.key_points = ai_result.key_points
-        article.detailed_summary = ai_result.detailed_summary
-        cls._replace_ai_tags(session, article, ai_result.tags)
-        session.execute(delete(ArticleChunk).where(ArticleChunk.article_id == article.id))
-        session.add_all(
-            [
-                ArticleChunk(
-                    article_id=article.id,
-                    chunk_index=chunk.chunk_index,
-                    content=chunk.content,
-                    token_count=chunk.token_count,
-                    embedding=chunk.embedding,
-                    chunk_metadata=chunk.metadata,
-                )
-                for chunk in chunks
-            ]
-        )
-        article.fetch_status = COMPLETED_STATUS
-        article.fetch_error = None
-        article.ai_status = COMPLETED_STATUS
-        article.ai_error = None
-        article.embedding_status = COMPLETED_STATUS
-        article.embedding_error = None
-        article.status = COMPLETED_STATUS
-        cls._commit(session)
-        session.expire(article, ["tags"])
+        try:
+            owned_article = ArticleTopicService.get_owned_article_for_update(
+                session,
+                article.id,
+                user_id,
+            )
+            old_pending_ids = ArticleTopicService.list_pending_tag_ids(
+                session,
+                owned_article.id,
+                user_id,
+            )
+            plan = ArticleTopicService.resolve_for_save(
+                session,
+                user_id,
+                ai_result,
+                old_pending_ids,
+            )
+            ArticleTopicService.replace_article_topics(
+                session,
+                user_id,
+                owned_article,
+                plan,
+            )
+            owned_article.clean_content = extracted.clean_content
+            owned_article.content_hash = new_hash
+            if owned_article.title is None:
+                owned_article.title = extracted.title
+            if owned_article.author is None:
+                owned_article.author = extracted.author
+            if owned_article.published_at is None:
+                owned_article.published_at = extracted.published_at
+            if owned_article.source_name is None:
+                owned_article.source_name = extracted.source_name
+            cls._assign_ai_summary(owned_article, ai_result)
+            session.execute(
+                delete(ArticleChunk).where(ArticleChunk.article_id == owned_article.id)
+            )
+            session.add_all(
+                [
+                    ArticleChunk(
+                        article_id=owned_article.id,
+                        chunk_index=chunk.chunk_index,
+                        content=chunk.content,
+                        token_count=chunk.token_count,
+                        embedding=chunk.embedding,
+                        chunk_metadata=chunk.metadata,
+                    )
+                    for chunk in chunks
+                ]
+            )
+            owned_article.fetch_status = COMPLETED_STATUS
+            owned_article.fetch_error = None
+            owned_article.ai_status = COMPLETED_STATUS
+            owned_article.ai_error = None
+            owned_article.embedding_status = COMPLETED_STATUS
+            owned_article.embedding_error = None
+            owned_article.status = COMPLETED_STATUS
+            session.expire(owned_article, ["tags"])
+            cls._commit(session)
+        except Exception:
+            session.rollback()
+            raise
 
     @classmethod
     def _finish_reprocess_fetch_failure(
@@ -796,32 +883,6 @@ class ArticleService:
     def _refresh(session: Session, article: Article) -> Article:
         session.refresh(article)
         return article
-
-    @staticmethod
-    def _replace_ai_tags(
-        session: Session,
-        article: Article,
-        tag_names: list[str],
-    ) -> None:
-        existing_tags = session.scalars(
-            select(Tag).where(
-                Tag.user_id == article.user_id,
-                Tag.name.in_(tag_names),
-            )
-        ).all()
-        tags_by_name = {tag.name: tag for tag in existing_tags}
-
-        session.execute(
-            delete(ArticleTag).where(ArticleTag.article_id == article.id)
-        )
-        for tag_name in tag_names:
-            tag = tags_by_name.get(tag_name)
-            if tag is None:
-                tag = Tag(user_id=article.user_id, name=tag_name)
-                session.add(tag)
-                session.flush()
-                tags_by_name[tag_name] = tag
-            session.add(ArticleTag(article_id=article.id, tag_id=tag.id))
 
     @classmethod
     def _mark_fetch_failed(

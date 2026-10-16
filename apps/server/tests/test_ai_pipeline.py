@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.ai.client import OpenAICompatibleClient
@@ -16,14 +16,15 @@ from app.ai.errors import (
     LLMServiceError,
     LLMTimeoutError,
 )
-from app.ai.schemas import AIArticleResult
+from app.ai.schemas import AIArticleSummaryResult, AIArticleTopicResult
 from app.ai.service import AIService
-from app.api.deps import get_ai_service, get_crawler_service
+from app.api.deps import get_ai_service, get_crawler_service, get_embedding_service
 from app.crawler.errors import CrawlerFallbackError
 from app.models.article import Article
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 from app.services.article import ArticleService
+from app.services.article_topic import ArticleTopicService
 from app.main import app
 
 
@@ -35,12 +36,18 @@ def create_payload() -> dict[str, str]:
 
 
 class ResultAIStub:
-    def __init__(self, result: AIArticleResult) -> None:
+    def __init__(self, result: AIArticleTopicResult) -> None:
         self.result = result
         self.calls = 0
+        self.active_topic_names: list[list[str]] = []
 
-    def generate_article_result(self, _content: str) -> AIArticleResult:
+    def generate_article_summary_with_topics(
+        self,
+        _content: str,
+        active_topic_names: list[str],
+    ) -> AIArticleTopicResult:
         self.calls += 1
+        self.active_topic_names.append(active_topic_names)
         return self.result
 
 
@@ -49,25 +56,44 @@ class ErrorAIStub:
         self.error = error
         self.calls = 0
 
-    def generate_article_result(self, _content: str) -> AIArticleResult:
+    def generate_article_summary_with_topics(
+        self,
+        _content: str,
+        _active_topic_names: list[str],
+    ) -> AIArticleTopicResult:
         self.calls += 1
         raise self.error
 
 
-def ai_result(*, tags: list[str] | None = None) -> AIArticleResult:
-    return AIArticleResult(
+def ai_result(
+    *,
+    topics: list[str] | None = None,
+    suggested_topic: str | None = None,
+) -> AIArticleTopicResult:
+    return AIArticleTopicResult(
         one_sentence_summary="文章解释了安全的结构化摘要流程。",
         key_points=["正文是唯一事实来源", "模型结果必须经过 Schema 校验"],
         detailed_summary="文章介绍了如何调用模型、校验结果并安全地持久化摘要和标签。",
-        tags=tags or ["AI", "内容处理"],
+        topics=topics or [],
+        suggested_topic=suggested_topic,
     )
 
 
-def test_ai_success_persists_summaries_key_points_and_tags(
+def test_initial_ai_uses_owned_active_catalog_and_does_not_create_arbitrary_active(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    service = ResultAIStub(ai_result(tags=["AI", "摘要", "AI"]))
+    db_session.add_all(
+        [
+            Tag(user_id=1, name="AI", status="active"),
+            Tag(user_id=1, name="摘要", status="active"),
+            Tag(user_id=2, name="外部主题", status="active"),
+        ]
+    )
+    db_session.commit()
+    service = ResultAIStub(
+        ai_result(topics=["AI", "任意新标签", "摘要"], suggested_topic="内容治理")
+    )
     app.dependency_overrides[get_ai_service] = lambda: service
 
     response = client.post("/api/v1/articles", json=create_payload())
@@ -78,6 +104,8 @@ def test_ai_success_persists_summaries_key_points_and_tags(
     assert data["key_points"] == ["正文是唯一事实来源", "模型结果必须经过 Schema 校验"]
     assert data["detailed_summary"]
     assert set(data["tags"]) == {"AI", "摘要"}
+    assert data["pending_topics"] == ["内容治理"]
+    assert service.active_topic_names == [["AI", "摘要"]]
     assert data["ai_status"] == "completed"
     assert data["ai_error"] is None
     assert data["status"] == "completed"
@@ -92,10 +120,16 @@ def test_ai_success_persists_summaries_key_points_and_tags(
         select(func.count()).select_from(ArticleTag).where(
             ArticleTag.article_id == data["id"]
         )
-    ) == 2
+    ) == 3
+    assert db_session.scalar(
+        select(func.count()).select_from(Tag).where(
+            Tag.user_id == 1,
+            Tag.name == "任意新标签",
+        )
+    ) == 0
 
 
-def test_new_article_and_regenerate_ai_use_the_same_summary_prompt(
+def test_new_article_uses_topic_mode_and_regenerate_uses_summary_mode(
     client: TestClient,
 ) -> None:
     class RecordingClient:
@@ -104,7 +138,13 @@ def test_new_article_and_regenerate_ai_use_the_same_summary_prompt(
 
         def complete(self, system_prompt: str, _user_prompt: str, **_kwargs: object) -> str:
             self.system_prompts.append(system_prompt)
-            return ai_result().model_dump_json()
+            if _kwargs.get("purpose") == "article_summary_topics":
+                return ai_result().model_dump_json()
+            return AIArticleSummaryResult(
+                one_sentence_summary="仅摘要结果",
+                key_points=["只更新摘要"],
+                detailed_summary="普通重新生成不会处理主题。",
+            ).model_dump_json()
 
     recording_client = RecordingClient()
     app.dependency_overrides[get_ai_service] = lambda: AIService(recording_client)
@@ -116,15 +156,21 @@ def test_new_article_and_regenerate_ai_use_the_same_summary_prompt(
 
     assert regenerated.status_code == 200
     assert len(recording_client.system_prompts) == 2
-    assert recording_client.system_prompts[0] == recording_client.system_prompts[1]
+    assert recording_client.system_prompts[0] != recording_client.system_prompts[1]
+    assert "topics" in recording_client.system_prompts[0]
+    assert "topics" not in recording_client.system_prompts[1]
     assert "最核心的内容或结论" in recording_client.system_prompts[0]
-    assert regenerated.json()["data"]["one_sentence_summary"] == ai_result().one_sentence_summary
+    assert regenerated.json()["data"]["one_sentence_summary"] == "仅摘要结果"
 
 
 def test_same_user_reuses_existing_tag_without_duplicate(
     client: TestClient,
     db_session: Session,
 ) -> None:
+    db_session.add(Tag(user_id=1, name="测试", status="active"))
+    db_session.commit()
+    service = ResultAIStub(ai_result(topics=["测试"]))
+    app.dependency_overrides[get_ai_service] = lambda: service
     first = client.post("/api/v1/articles", json=create_payload())
     second = client.post("/api/v1/articles", json=create_payload())
 
@@ -160,18 +206,27 @@ def test_ai_rerun_replaces_article_tags_only_after_success(db_session: Session) 
         embedding_status="pending",
     )
     db_session.add(article)
+    db_session.add_all(
+        [
+            Tag(user_id=1, name="保留标签", status="active"),
+            Tag(user_id=1, name="旧标签", status="active"),
+            Tag(user_id=1, name="新标签", status="active"),
+        ]
+    )
     db_session.commit()
     db_session.refresh(article)
 
     ArticleService.process_ai_if_ready(
         db_session,
         article,
-        ResultAIStub(ai_result(tags=["保留标签", "旧标签"])),
+        1,
+        ResultAIStub(ai_result(topics=["保留标签", "旧标签"])),
     )
     ArticleService.process_ai_if_ready(
         db_session,
         article,
-        ResultAIStub(ai_result(tags=["保留标签", "新标签"])),
+        1,
+        ResultAIStub(ai_result(topics=["保留标签", "新标签"])),
     )
 
     current_names = set(
@@ -185,6 +240,87 @@ def test_ai_rerun_replaces_article_tags_only_after_success(db_session: Session) 
     assert db_session.scalar(
         select(func.count()).select_from(Tag).where(Tag.name == "旧标签")
     ) == 1
+
+
+def test_initial_topic_save_failure_marks_ai_failed_without_partial_data(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    suggestion = f"保存失败建议-{uuid4()}"
+    service = ResultAIStub(ai_result(suggested_topic=suggestion))
+    original_replace = ArticleTopicService.replace_article_topics
+
+    def fail_after_replace(*args: object, **kwargs: object) -> None:
+        original_replace(*args, **kwargs)
+        db_session.flush()
+        db_session.execute(
+            text(
+                "INSERT INTO tags (user_id, name, status) "
+                "VALUES (1, :name, 'invalid')"
+            ),
+            {"name": f"约束失败-{uuid4()}"},
+        )
+
+    class EmbeddingMustNotRun:
+        def generate(self, _content: str):
+            raise AssertionError("主题保存失败后不应继续 Embedding")
+
+    monkeypatch.setattr(ArticleTopicService, "replace_article_topics", fail_after_replace)
+    app.dependency_overrides[get_ai_service] = lambda: service
+    app.dependency_overrides[get_embedding_service] = EmbeddingMustNotRun
+
+    response = client.post("/api/v1/articles", json=create_payload())
+
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data["ai_status"] == "failed"
+    assert data["ai_error"] == "AI 结果保存失败"
+    assert data["one_sentence_summary"] is None
+    assert data["tags"] == []
+    assert data["pending_topics"] == []
+    assert db_session.scalar(select(Tag.id).where(Tag.name == suggestion)) is None
+
+
+def test_topic_save_revalidates_active_status_after_model_call(
+    db_session: Session,
+) -> None:
+    article = Article(
+        user_id=1,
+        source_type="web",
+        source_url=f"https://latest-topic.example/{uuid4()}",
+        clean_content="保存前主题状态复核正文。" * 30,
+        content_hash="b" * 64,
+        status="processing",
+        fetch_status="completed",
+        ai_status="pending",
+        embedding_status="pending",
+    )
+    active = Tag(user_id=1, name=f"调用后失效-{uuid4()}", status="active")
+    db_session.add_all([article, active])
+    db_session.commit()
+
+    class StatusChangingAI:
+        def generate_article_summary_with_topics(
+            self,
+            _content: str,
+            active_topic_names: list[str],
+        ) -> AIArticleTopicResult:
+            assert active.name in active_topic_names
+            active.status = "pending"
+            db_session.commit()
+            return ai_result(topics=[active.name])
+
+    ArticleService.process_ai_if_ready(db_session, article, 1, StatusChangingAI())
+
+    db_session.expire_all()
+    assert db_session.get(Article, article.id).ai_status == "completed"
+    assert db_session.get(Tag, active.id).status == "pending"
+    assert db_session.scalar(
+        select(func.count()).select_from(ArticleTag).where(
+            ArticleTag.article_id == article.id
+        )
+    ) == 0
 
 
 @pytest.mark.parametrize(

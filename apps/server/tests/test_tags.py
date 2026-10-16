@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.ai.schemas import AIArticleResult
+from app.ai.schemas import AIArticleTopicResult
 from app.api.deps import get_ai_service, get_current_user_id
 from app.main import app
 from app.models.article import Article
@@ -229,19 +229,24 @@ def test_delete_tag_cascades_relation_but_preserves_article(
     assert persisted_article.one_sentence_summary == original_summary
 
 
-def test_ai_generated_tag_can_be_managed_through_tags_api(
+def test_ai_suggested_topic_can_be_promoted_and_managed_through_tags_api(
     client: TestClient,
     db_session: Session,
 ) -> None:
     ai_name = unique_name("AI生成")
 
     class UniqueTagAIStub:
-        def generate_article_result(self, _clean_content: str) -> AIArticleResult:
-            return AIArticleResult(
+        def generate_article_summary_with_topics(
+            self,
+            _clean_content: str,
+            _active_topic_names: list[str],
+        ) -> AIArticleTopicResult:
+            return AIArticleTopicResult(
                 one_sentence_summary="AI 标签管理验证。",
                 key_points=["自动标签与人工管理共享数据"],
                 detailed_summary="AI 创建的标签应当可以通过 Tags API 修改和删除。",
-                tags=[ai_name, ai_name],
+                topics=[],
+                suggested_topic=ai_name,
             )
 
     app.dependency_overrides[get_ai_service] = UniqueTagAIStub
@@ -254,8 +259,9 @@ def test_ai_generated_tag_can_be_managed_through_tags_api(
     )
     article_id = article_response.json()["data"]["id"]
 
-    listed = client.get("/api/v1/tags")
-    ai_tag = next(tag for tag in listed.json()["data"] if tag["name"] == ai_name)
+    pending = client.get("/api/v1/tags/pending").json()["data"]
+    ai_tag = next(tag for tag in pending if tag["name"] == ai_name)
+    promoted = client.post(f"/api/v1/tags/{ai_tag['id']}/promote")
     renamed = unique_name("人工改名")
     updated = client.patch(
         f"/api/v1/tags/{ai_tag['id']}",
@@ -264,6 +270,7 @@ def test_ai_generated_tag_can_be_managed_through_tags_api(
     deleted = client.delete(f"/api/v1/tags/{ai_tag['id']}")
 
     assert article_response.status_code == 201
+    assert promoted.status_code == 200
     assert updated.status_code == 200
     assert updated.json()["data"]["name"] == renamed
     assert deleted.status_code == 200
@@ -284,12 +291,17 @@ def test_ai_reuses_manual_tag_without_duplicate(
     tag_id = manual.json()["data"]["id"]
 
     class ReuseTagAIStub:
-        def generate_article_result(self, _clean_content: str) -> AIArticleResult:
-            return AIArticleResult(
+        def generate_article_summary_with_topics(
+            self,
+            _clean_content: str,
+            _active_topic_names: list[str],
+        ) -> AIArticleTopicResult:
+            return AIArticleTopicResult(
                 one_sentence_summary="复用标签。",
                 key_points=["同名标签不重复创建"],
                 detailed_summary="人工标签和 AI 标签使用相同的 tags 表。",
-                tags=[name, name],
+                topics=[name, name],
+                suggested_topic=None,
             )
 
     app.dependency_overrides[get_ai_service] = ReuseTagAIStub
@@ -364,7 +376,11 @@ def test_promote_preserves_links_and_rejects_repeat(client: TestClient, db_sessi
     assert repeated.json()["code"] == 40905
 
 
-def test_merge_deduplicates_and_deletes_pending(client: TestClient, db_session: Session) -> None:
+def test_merge_deduplicates_and_deletes_pending(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pending = Tag(user_id=1, name=unique_name("合并来源"), status="pending")
     target = Tag(user_id=1, name=unique_name("合并目标"), status="active")
     db_session.add_all([pending, target])
@@ -377,10 +393,20 @@ def test_merge_deduplicates_and_deletes_pending(client: TestClient, db_session: 
         ArticleTag(article_id=first.id, tag_id=target.id),
     ])
     db_session.commit()
+    commit_count = 0
+    original_commit = db_session.commit
+
+    def count_commit() -> None:
+        nonlocal commit_count
+        commit_count += 1
+        original_commit()
+
+    monkeypatch.setattr(db_session, "commit", count_commit)
 
     response = client.post(f"/api/v1/tags/{pending.id}/merge", json={"target_tag_id": target.id})
 
     assert response.status_code == 200
+    assert commit_count == 1
     assert response.json()["data"] == {
         "tag_id": pending.id,
         "target_tag_id": target.id,
@@ -391,6 +417,82 @@ def test_merge_deduplicates_and_deletes_pending(client: TestClient, db_session: 
     assert db_session.get(Article, second.id) is not None
     assert db_session.scalar(select(func.count()).select_from(ArticleTag).where(ArticleTag.tag_id == target.id)) == 2
     assert client.post(f"/api/v1/tags/{pending.id}/merge", json={"target_tag_id": target.id}).status_code == 404
+
+
+def test_merge_article_set_retry_exhaustion_returns_409_without_changes(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = Tag(user_id=1, name=unique_name("重试耗尽来源"), status="pending")
+    target = Tag(user_id=1, name=unique_name("重试耗尽目标"), status="active")
+    db_session.add_all([pending, target])
+    db_session.flush()
+    first = create_article(db_session)
+    second = create_article(db_session)
+    db_session.add(ArticleTag(article_id=first.id, tag_id=pending.id))
+    db_session.commit()
+    pending_id = pending.id
+    target_id = target.id
+    first_id = first.id
+    second_id = second.id
+    query_count = 0
+    rollback_count = 0
+    commit_count = 0
+    original_rollback = db_session.rollback
+    original_commit = db_session.commit
+
+    def changing_article_ids(
+        _session: Session,
+        _tag_id: int,
+        _user_id: int,
+    ) -> tuple[int, ...]:
+        nonlocal query_count
+        query_count += 1
+        if query_count % 2:
+            return (first_id,)
+        return (first_id, second_id)
+
+    def count_rollback() -> None:
+        nonlocal rollback_count
+        rollback_count += 1
+        original_rollback()
+
+    def count_commit() -> None:
+        nonlocal commit_count
+        commit_count += 1
+        original_commit()
+
+    monkeypatch.setattr(
+        TagService,
+        "_list_merge_article_ids",
+        staticmethod(changing_article_ids),
+        raising=False,
+    )
+    monkeypatch.setattr(db_session, "rollback", count_rollback)
+    monkeypatch.setattr(db_session, "commit", count_commit)
+
+    response = client.post(
+        f"/api/v1/tags/{pending_id}/merge",
+        json={"target_tag_id": target_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": 40907,
+        "message": "待整理主题关联正在变化，请稍后重试",
+        "data": None,
+    }
+    assert query_count == 6
+    assert rollback_count == 3
+    assert commit_count == 0
+    db_session.expire_all()
+    assert db_session.get(Tag, pending_id).status == "pending"
+    assert db_session.get(Tag, target_id).status == "active"
+    assert db_session.get(ArticleTag, (first_id, pending_id)) is not None
+    assert db_session.get(ArticleTag, (second_id, pending_id)) is None
+    assert db_session.get(ArticleTag, (first_id, target_id)) is None
+    assert db_session.get(ArticleTag, (second_id, target_id)) is None
 
 
 def test_ignore_deletes_links_only(client: TestClient, db_session: Session) -> None:

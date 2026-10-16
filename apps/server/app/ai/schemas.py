@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 SummaryText = Annotated[
@@ -17,19 +17,18 @@ TagText = Annotated[
 ]
 
 
-class AIArticleResult(BaseModel):
-    """LLM 文章分析结果的可信结构。"""
+class AIArticleSummaryResult(BaseModel):
+    """LLM 文章摘要结果的可信结构。"""
 
     model_config = ConfigDict(extra="forbid")
 
     one_sentence_summary: SummaryText
     key_points: list[KeyPointText] = Field(min_length=1, max_length=10)
     detailed_summary: SummaryText
-    tags: list[TagText] = Field(min_length=1, max_length=10)
 
-    @field_validator("tags", mode="after")
-    @classmethod
-    def deduplicate_tags(cls, tags: list[str]) -> list[str]:
-        """保持模型顺序并移除完全同名的重复标签。"""
 
-        return list(dict.fromkeys(tags))
+class AIArticleTopicResult(AIArticleSummaryResult):
+    """LLM 文章摘要与主题候选的清洗后结构。"""
+
+    topics: list[TagText] = Field(default_factory=list)
+    suggested_topic: TagText | None = None

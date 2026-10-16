@@ -12,7 +12,7 @@ except ValueError as exc:
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.ai.schemas import AIArticleResult
+from app.ai.schemas import AIArticleSummaryResult, AIArticleTopicResult
 from app.api.deps import (
     get_ai_service,
     get_crawler_service,
@@ -39,12 +39,26 @@ class SuccessfulCrawlerStub:
 class SuccessfulAIStub:
     """为既有 API 回归测试提供不消耗 Token 的结构化 AI 结果。"""
 
-    def generate_article_result(self, _clean_content: str) -> AIArticleResult:
-        return AIArticleResult(
+    def generate_article_summary(
+        self, _clean_content: str
+    ) -> AIArticleSummaryResult:
+        return AIArticleSummaryResult(
             one_sentence_summary="测试文章的一句话总结。",
             key_points=["核心观点一", "核心观点二"],
             detailed_summary="这是用于自动化回归测试的详细摘要。",
-            tags=["测试", "AI"],
+        )
+
+    def generate_article_summary_with_topics(
+        self,
+        _clean_content: str,
+        _active_topic_names: list[str],
+    ) -> AIArticleTopicResult:
+        return AIArticleTopicResult(
+            one_sentence_summary="测试文章的一句话总结。",
+            key_points=["核心观点一", "核心观点二"],
+            detailed_summary="这是用于自动化回归测试的详细摘要。",
+            topics=[],
+            suggested_topic=None,
         )
 
 

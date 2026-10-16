@@ -189,7 +189,7 @@ def regenerate_article_ai(
     min_content_chars: MinimumContentChars,
     ai_service: ArticleAI,
 ) -> ApiResponse[ArticleDetail]:
-    """仅使用当前正文重新生成 AI 字段和标签。"""
+    """仅使用当前正文重新生成摘要和核心观点，保留现有主题关联。"""
 
     article = ArticleService.regenerate_ai(
         session,

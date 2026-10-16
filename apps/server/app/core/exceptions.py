@@ -138,6 +138,17 @@ class TagAssociationConflictError(AppError):
         )
 
 
+class TagMergeConcurrentConflictError(AppError):
+    """待整理主题的关联集合持续变化，无法安全归入。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            code=40907,
+            message="待整理主题关联正在变化，请稍后重试",
+        )
+
+
 class SemanticSearchEmbeddingError(AppError):
     """语义搜索生成查询向量失败。"""
 

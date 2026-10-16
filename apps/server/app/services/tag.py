@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import (
     TagAlreadyExistsError,
     TagAssociationConflictError,
+    TagMergeConcurrentConflictError,
     TagNotFoundError,
     TagStatusConflictError,
 )
@@ -14,8 +15,14 @@ from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
 
 
+class _MergeArticleSetChanged(Exception):
+    """本轮归入操作锁定的文章集合已经过期。"""
+
+
 class TagService:
     """当前用户的 Tag CRUD 业务。"""
+
+    MERGE_MAX_ATTEMPTS = 3
 
     @staticmethod
     def list_tags(session: Session, user_id: int) -> list[tuple[Tag, int]]:
@@ -217,34 +224,111 @@ class TagService:
     def merge_pending(
         cls, session: Session, tag_id: int, target_tag_id: int, user_id: int
     ) -> dict[str, int]:
-        try:
-            pending = cls._get_locked_pending(session, tag_id, user_id)
-            target = cls._get_locked_tag(session, target_tag_id, user_id)
-            if target.status != "active":
-                raise TagStatusConflictError()
-            cls._ensure_no_foreign_association(session, pending.id, user_id)
-            article_ids = list(session.scalars(
+        for _attempt in range(cls.MERGE_MAX_ATTEMPTS):
+            try:
+                return cls._merge_pending_once(
+                    session,
+                    tag_id,
+                    target_tag_id,
+                    user_id,
+                )
+            except _MergeArticleSetChanged:
+                session.rollback()
+            except Exception:
+                session.rollback()
+                raise
+        raise TagMergeConcurrentConflictError()
+
+    @staticmethod
+    def _list_merge_article_ids(
+        session: Session,
+        tag_id: int,
+        user_id: int,
+    ) -> tuple[int, ...]:
+        """按固定顺序读取来源待整理主题的当前文章集合。"""
+
+        return tuple(
+            session.scalars(
                 select(Article.id)
                 .join(ArticleTag, ArticleTag.article_id == Article.id)
-                .where(ArticleTag.tag_id == pending.id, Article.user_id == user_id)
-                .order_by(Article.id)
-            ).all())
-            if article_ids:
-                statement = pg_insert(ArticleTag).values(
-                    [{"article_id": article_id, "tag_id": target.id} for article_id in article_ids]
+                .where(
+                    ArticleTag.tag_id == tag_id,
+                    Article.user_id == user_id,
                 )
-                session.execute(statement.on_conflict_do_nothing(
+                .order_by(Article.id)
+            )
+        )
+
+    @classmethod
+    def _merge_pending_once(
+        cls,
+        session: Session,
+        tag_id: int,
+        target_tag_id: int,
+        user_id: int,
+    ) -> dict[str, int]:
+        """仅在文章集合稳定时完成一次归入事务。"""
+
+        discovered_article_ids = cls._list_merge_article_ids(session, tag_id, user_id)
+        locked_article_ids: tuple[int, ...] = ()
+        if discovered_article_ids:
+            locked_article_ids = tuple(
+                session.scalars(
+                    select(Article.id)
+                    .where(
+                        Article.user_id == user_id,
+                        Article.id.in_(discovered_article_ids),
+                    )
+                    .order_by(Article.id)
+                    .with_for_update()
+                )
+            )
+
+        locked_tags = list(
+            session.scalars(
+                select(Tag)
+                .where(
+                    Tag.user_id == user_id,
+                    Tag.id.in_(sorted({tag_id, target_tag_id})),
+                )
+                .order_by(Tag.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        tags_by_id = {tag.id: tag for tag in locked_tags}
+        pending = tags_by_id.get(tag_id)
+        target = tags_by_id.get(target_tag_id)
+        if pending is None or target is None:
+            raise TagNotFoundError()
+        if pending.status != "pending":
+            raise TagStatusConflictError()
+        if target.status != "active":
+            raise TagStatusConflictError()
+
+        current_article_ids = cls._list_merge_article_ids(session, pending.id, user_id)
+        if current_article_ids != locked_article_ids:
+            raise _MergeArticleSetChanged()
+
+        cls._ensure_no_foreign_association(session, pending.id, user_id)
+        if current_article_ids:
+            statement = pg_insert(ArticleTag).values(
+                [
+                    {"article_id": article_id, "tag_id": target.id}
+                    for article_id in current_article_ids
+                ]
+            )
+            session.execute(
+                statement.on_conflict_do_nothing(
                     index_elements=[ArticleTag.article_id, ArticleTag.tag_id]
-                ))
-            session.delete(pending)
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
+                )
+            )
+        session.delete(pending)
+        session.commit()
         return {
             "tag_id": tag_id,
             "target_tag_id": target_tag_id,
-            "affected_article_count": len(article_ids),
+            "affected_article_count": len(current_article_ids),
         }
 
     @classmethod

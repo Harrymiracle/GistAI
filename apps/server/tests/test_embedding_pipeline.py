@@ -77,7 +77,7 @@ def test_embedding_success_persists_ordered_chunks_and_vectors(
     assert data["clean_content"]
     assert data["content_hash"]
     assert data["one_sentence_summary"]
-    assert data["tags"]
+    assert data["tags"] == []
     assert service.calls == 1
 
     chunks = db_session.scalars(
@@ -114,7 +114,7 @@ def test_embedding_failure_sets_partial_failed_and_preserves_article_data(
     assert data["one_sentence_summary"]
     assert data["key_points"]
     assert data["detailed_summary"]
-    assert set(data["tags"]) == {"测试", "AI"}
+    assert data["tags"] == []
     assert db_session.scalar(
         select(func.count()).select_from(ArticleChunk).where(
             ArticleChunk.article_id == data["id"]
@@ -124,7 +124,11 @@ def test_embedding_failure_sets_partial_failed_and_preserves_article_data(
 
 def test_ai_failure_does_not_call_embedding(client: TestClient) -> None:
     class FailedAI:
-        def generate_article_result(self, _clean_content: str):
+        def generate_article_summary_with_topics(
+            self,
+            _clean_content: str,
+            _active_topic_names: list[str],
+        ):
             raise LLMResponseError("LLM 返回的结构化结果无效")
 
     embedding = MultiChunkEmbeddingStub()

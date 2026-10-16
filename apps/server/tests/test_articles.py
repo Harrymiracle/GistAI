@@ -43,7 +43,7 @@ def test_create_success(client: TestClient) -> None:
     assert body["data"]["fetch_status"] == "completed"
     assert body["data"]["ai_status"] == "completed"
     assert body["data"]["one_sentence_summary"] == "测试文章的一句话总结。"
-    assert set(body["data"]["tags"]) == {"测试", "AI"}
+    assert body["data"]["tags"] == []
     assert body["data"]["embedding_status"] == "completed"
 
 

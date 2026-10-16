@@ -3,11 +3,12 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.ai.errors import LLMResponseError, LLMTimeoutError
-from app.ai.schemas import AIArticleResult
+from app.ai.schemas import AIArticleSummaryResult, AIArticleTopicResult
+from app.ai.service import AIService
 from app.api.deps import get_ai_service, get_crawler_service, get_embedding_service
 from app.crawler.errors import CrawlerFallbackError
 from app.crawler.extractor import ExtractedArticle
@@ -18,6 +19,7 @@ from app.models.article import Article
 from app.models.article_chunk import ArticleChunk
 from app.models.article_tag import ArticleTag
 from app.models.tag import Tag
+from app.services.article_topic import ArticleTopicService
 
 
 OLD_CONTENT = "旧的有效正文用于验证重新处理时的数据保护和原子替换。" * 20
@@ -42,21 +44,56 @@ class CrawlerStub:
 
 
 class AIStub:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        topics: list[str] | None = None,
+        suggested_topic: str | None = None,
+    ) -> None:
         self.error = error
-        self.calls = 0
+        self.topics = topics if topics is not None else ["新标签", "共同标签"]
+        self.suggested_topic = suggested_topic
+        self.topic_calls = 0
+        self.summary_calls = 0
         self.contents: list[str] = []
+        self.active_topic_names: list[list[str]] = []
 
-    def generate_article_result(self, content: str) -> AIArticleResult:
-        self.calls += 1
+    @property
+    def calls(self) -> int:
+        return self.topic_calls + self.summary_calls
+
+    def _summary(self) -> dict[str, object]:
+        return {
+            "one_sentence_summary": "新的摘要",
+            "key_points": ["新观点一", "新观点二"],
+            "detailed_summary": "新的详细摘要",
+        }
+
+    def generate_article_summary(
+        self,
+        content: str,
+    ) -> AIArticleSummaryResult:
+        self.summary_calls += 1
         self.contents.append(content)
         if self.error is not None:
             raise self.error
-        return AIArticleResult(
-            one_sentence_summary="新的摘要",
-            key_points=["新观点一", "新观点二"],
-            detailed_summary="新的详细摘要",
-            tags=["新标签", "共同标签"],
+        return AIArticleSummaryResult(**self._summary())
+
+    def generate_article_summary_with_topics(
+        self,
+        content: str,
+        active_topic_names: list[str],
+    ) -> AIArticleTopicResult:
+        self.topic_calls += 1
+        self.contents.append(content)
+        self.active_topic_names.append(active_topic_names)
+        if self.error is not None:
+            raise self.error
+        return AIArticleTopicResult(
+            **self._summary(),
+            topics=self.topics,
+            suggested_topic=self.suggested_topic,
         )
 
 
@@ -118,7 +155,8 @@ def create_completed_article(
     session.flush()
     old_tag = Tag(user_id=user_id, name=f"旧标签-{uuid4()}")
     common_tag = Tag(user_id=user_id, name="共同标签")
-    session.add_all([old_tag, common_tag])
+    new_tag = Tag(user_id=user_id, name="新标签")
+    session.add_all([old_tag, common_tag, new_tag])
     session.flush()
     session.add_all(
         [
@@ -202,6 +240,7 @@ def test_reprocess_success_atomically_replaces_complete_pipeline(
     assert result["content_hash"] == hashlib.sha256(NEW_CONTENT.encode()).hexdigest()
     assert result["one_sentence_summary"] == "新的摘要"
     assert set(result["tags"]) == {"新标签", "共同标签"}
+    assert result["pending_topics"] == []
     assert result["status"] == "completed"
     assert result["fetch_status"] == "completed"
     assert result["ai_status"] == "completed"
@@ -210,6 +249,11 @@ def test_reprocess_success_atomically_replaces_complete_pipeline(
     assert [chunk.chunk_index for chunk in current_chunks] == [0, 1]
     assert all(chunk.chunk_metadata["generation"] == "new" for chunk in current_chunks)
     assert crawler.calls == ai.calls == embedding.calls == 1
+    assert set(ai.active_topic_names[0]) == set(
+        db_session.scalars(
+            select(Tag.name).where(Tag.user_id == 1, Tag.status == "active")
+        )
+    )
 
 
 def test_reprocess_fetch_failure_preserves_all_old_data(
@@ -444,6 +488,52 @@ def test_reprocess_continues_ai_and_embedding_without_refetch(
     assert embedding.contents == [OLD_CONTENT]
 
 
+def test_continued_topic_save_failure_preserves_old_data_and_skips_embedding(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = create_completed_article(
+        db_session,
+        status="partial_failed",
+        ai_status="failed",
+        embedding_status="pending",
+    )
+    old_values = article_values(article)
+    old_tags = tag_names(db_session, article.id)
+    old_chunks = [(chunk.content, list(chunk.embedding)) for chunk in chunks(db_session, article.id)]
+    suggestion = f"继续保存失败-{uuid4()}"
+    ai = AIStub(topics=[], suggested_topic=suggestion)
+    embedding = EmbeddingStub()
+    original_replace = ArticleTopicService.replace_article_topics
+
+    def fail_after_replace(*args: object, **kwargs: object) -> None:
+        original_replace(*args, **kwargs)
+        db_session.flush()
+        db_session.execute(
+            text(
+                "INSERT INTO tags (user_id, name, status) "
+                "VALUES (1, :name, 'invalid')"
+            ),
+            {"name": f"继续约束失败-{uuid4()}"},
+        )
+
+    monkeypatch.setattr(ArticleTopicService, "replace_article_topics", fail_after_replace)
+    configure(ExplodingService(), ai, embedding)
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    db_session.refresh(article)
+    assert article_values(article) == old_values
+    assert tag_names(db_session, article.id) == old_tags
+    assert [(chunk.content, list(chunk.embedding)) for chunk in chunks(db_session, article.id)] == old_chunks
+    assert article.ai_status == "failed"
+    assert article.ai_error == "AI 结果保存失败"
+    assert embedding.calls == 0
+    assert db_session.scalar(select(Tag.id).where(Tag.name == suggestion)) is None
+
+
 def test_reprocess_continues_embedding_without_refetch_or_ai(
     client: TestClient,
     db_session: Session,
@@ -471,12 +561,25 @@ def test_reprocess_continues_embedding_without_refetch_or_ai(
     assert embedding.contents == [OLD_CONTENT]
 
 
-def test_regenerate_ai_only_replaces_ai_and_tags(
+def test_regenerate_ai_replaces_only_summary_and_preserves_all_topics(
     client: TestClient,
     db_session: Session,
 ) -> None:
     article = create_completed_article(db_session)
+    pending = Tag(user_id=1, name=f"保留建议-{uuid4()}", status="pending")
+    db_session.add(pending)
+    db_session.flush()
+    db_session.add(ArticleTag(article_id=article.id, tag_id=pending.id))
+    db_session.commit()
     old_content_hash = (article.clean_content, article.content_hash)
+    old_tags = list(
+        db_session.execute(
+            select(Tag.id, Tag.status)
+            .join(ArticleTag, ArticleTag.tag_id == Tag.id)
+            .where(ArticleTag.article_id == article.id)
+            .order_by(Tag.id)
+        )
+    )
     old_chunks = [(c.content, list(c.embedding)) for c in chunks(db_session, article.id)]
     ai = AIStub()
     configure(ExplodingService(), ai, ExplodingService())
@@ -487,12 +590,117 @@ def test_regenerate_ai_only_replaces_ai_and_tags(
     data = response.json()["data"]
     assert (data["clean_content"], data["content_hash"]) == old_content_hash
     assert data["one_sentence_summary"] == "新的摘要"
-    assert set(data["tags"]) == {"新标签", "共同标签"}
+    assert set(data["tags"]) == {name for name in tag_names(db_session, article.id) if name != pending.name}
+    assert data["pending_topics"] == [pending.name]
     assert data["embedding_status"] == "completed"
     assert data["status"] == "completed"
     current_chunks = [(c.content, list(c.embedding)) for c in chunks(db_session, article.id)]
     assert current_chunks == old_chunks
     assert ai.calls == 1
+    assert ai.summary_calls == 1
+    assert ai.topic_calls == 0
+    assert list(
+        db_session.execute(
+            select(Tag.id, Tag.status)
+            .join(ArticleTag, ArticleTag.tag_id == Tag.id)
+            .where(ArticleTag.article_id == article.id)
+            .order_by(Tag.id)
+        )
+    ) == old_tags
+
+
+def test_regenerate_ai_ignores_unexpected_topic_fields_and_never_loads_catalog(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = create_completed_article(db_session)
+    old_tags = tag_names(db_session, article.id)
+
+    class RawSummaryClient:
+        def complete(self, _system_prompt: str, _user_prompt: str, **_kwargs: object) -> str:
+            return (
+                '{"one_sentence_summary":"忽略主题字段后的摘要",'
+                '"key_points":["只更新摘要"],'
+                '"detailed_summary":"主题字段类型错误也不会影响摘要。",'
+                '"topics":{"wrong":true},"suggested_topic":["wrong"]}'
+            )
+
+    def fail_if_catalog_loaded(*_args: object, **_kwargs: object):
+        raise AssertionError("普通重新生成不应读取正式主题清单")
+
+    monkeypatch.setattr(ArticleTopicService, "list_active_names", fail_if_catalog_loaded)
+    configure(ai=AIService(RawSummaryClient()))
+
+    response = client.post(f"/api/v1/articles/{article.id}/regenerate-ai")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["one_sentence_summary"] == "忽略主题字段后的摘要"
+    assert tag_names(db_session, article.id) == old_tags
+
+
+def test_complete_reprocess_empty_topics_clears_links_and_orphan_pending(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = create_completed_article(db_session)
+    pending = Tag(user_id=1, name=f"旧孤立建议-{uuid4()}", status="pending")
+    db_session.add(pending)
+    db_session.flush()
+    db_session.add(ArticleTag(article_id=article.id, tag_id=pending.id))
+    db_session.commit()
+    pending_id = pending.id
+    configure(CrawlerStub(), AIStub(topics=[]), EmbeddingStub())
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["article"]["tags"] == []
+    assert response.json()["data"]["article"]["pending_topics"] == []
+    assert tag_names(db_session, article.id) == []
+    assert db_session.get(Tag, pending_id) is None
+
+
+def test_complete_reprocess_save_failure_rolls_back_all_business_data(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = create_completed_article(db_session)
+    old_values = article_values(article)
+    old_tags = tag_names(db_session, article.id)
+    old_chunks = [(chunk.content, list(chunk.embedding)) for chunk in chunks(db_session, article.id)]
+    suggestion = f"完整重处理建议-{uuid4()}"
+    original_replace = ArticleTopicService.replace_article_topics
+
+    def fail_after_replace(*args: object, **kwargs: object) -> None:
+        original_replace(*args, **kwargs)
+        db_session.flush()
+        db_session.execute(
+            text(
+                "INSERT INTO tags (user_id, name, status) "
+                "VALUES (1, :name, 'invalid')"
+            ),
+            {"name": f"完整约束失败-{uuid4()}"},
+        )
+
+    monkeypatch.setattr(ArticleTopicService, "replace_article_topics", fail_after_replace)
+    configure(
+        CrawlerStub(),
+        AIStub(topics=["共同标签"], suggested_topic=suggestion),
+        EmbeddingStub(),
+    )
+
+    response = client.post(f"/api/v1/articles/{article.id}/reprocess")
+
+    assert response.status_code == 200
+    db_session.refresh(article)
+    assert article_values(article) == old_values
+    assert tag_names(db_session, article.id) == old_tags
+    assert [(chunk.content, list(chunk.embedding)) for chunk in chunks(db_session, article.id)] == old_chunks
+    assert db_session.scalar(select(Tag.id).where(Tag.name == suggestion)) is None
+    assert article.embedding_status == "failed"
+    assert article.embedding_error == "重处理结果保存失败"
 
 
 def test_regenerate_ai_failure_preserves_old_ai_tags_and_embedding(
@@ -690,7 +898,14 @@ def test_unexpected_external_errors_are_safe(
             raise RuntimeError("private provider detail")
 
     class UnexpectedAI:
-        def generate_article_result(self, _content: str):
+        def generate_article_summary(self, _content: str):
+            raise RuntimeError("private provider detail")
+
+        def generate_article_summary_with_topics(
+            self,
+            _content: str,
+            _active_topic_names: list[str],
+        ):
             raise RuntimeError("private provider detail")
 
     class UnexpectedEmbedding:

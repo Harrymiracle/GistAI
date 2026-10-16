@@ -6,11 +6,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_crawler_service
+from app.ai.schemas import AIArticleTopicResult
+from app.api.deps import get_ai_service, get_crawler_service
 from app.core.config import settings
 from app.crawler.cleaner import clean_and_validate_content
 from app.main import app
 from app.models.article import Article
+from app.models.tag import Tag
 
 
 MIN_CONTENT_CHARS = settings.fetch_min_content_chars
@@ -78,6 +80,46 @@ def test_failed_article_accepts_manual_content_and_persists_hash(
     assert persisted is not None
     assert persisted.clean_content == expected_content
     assert persisted.content_hash == expected_hash
+
+
+def test_manual_content_uses_summary_with_owned_topics_mode(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    article = add_article(db_session)
+    owned = Tag(user_id=1, name=f"手动正式-{uuid4()}", status="active")
+    foreign = Tag(user_id=2, name=f"外部正式-{uuid4()}", status="active")
+    db_session.add_all([owned, foreign])
+    db_session.commit()
+
+    class RecordingTopicAI:
+        def __init__(self) -> None:
+            self.catalogs: list[list[str]] = []
+
+        def generate_article_summary_with_topics(
+            self,
+            _content: str,
+            active_topic_names: list[str],
+        ) -> AIArticleTopicResult:
+            self.catalogs.append(active_topic_names)
+            return AIArticleTopicResult(
+                one_sentence_summary="手动正文摘要",
+                key_points=["手动正文同样分类"],
+                detailed_summary="手动粘贴正文使用摘要与主题模式。",
+                topics=[owned.name],
+            )
+
+    ai = RecordingTopicAI()
+    app.dependency_overrides[get_ai_service] = lambda: ai
+
+    response = client.post(
+        f"/api/v1/articles/{article.id}/manual-content",
+        json={"content": MANUAL_CONTENT},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["tags"] == [owned.name]
+    assert ai.catalogs == [[owned.name]]
 
 
 def test_manual_content_article_404(client: TestClient) -> None:
